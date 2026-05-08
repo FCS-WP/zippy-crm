@@ -1,9 +1,12 @@
 <?php
 namespace ZippyCrm\Hooks;
 
+use ZippyCrm\Models\NotifSub;
 use ZippyCrm\Models\PointsSummary;
+use ZippyCrm\Services\ClaimHandler;
 use ZippyCrm\Services\MembershipService;
 use ZippyCrm\Services\PointsEngine;
+use ZippyCrm\Services\SubsManager;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -24,11 +27,11 @@ final class WooCommerce {
 	public static function on_customer_created( int $user_id, array $data = [], bool $password_generated = false ): void {
 		MembershipService::on_customer_created( $user_id );
 		PointsSummary::set( $user_id, 0, 0, 0 );
-		// TODO (Notifications): SubsManager::save_optin_preference.
+		SubsManager::on_customer_created( $user_id );
 	}
 
 	public static function render_optin_field(): void {
-		// TODO (Notifications): SubsManager::render_optin_field().
+		SubsManager::render_optin_field();
 	}
 
 	public static function on_order_completed( int $order_id ): void {
@@ -44,21 +47,25 @@ final class WooCommerce {
 		// Order matters:
 		//   1. tier (so the multiplier reflects the new level on the very order
 		//      that pushed them up to it)
-		//   2. earn (uses subtotal-after-discounts, so a redeemed coupon already
+		//   2. earn (uses subtotal-after-discounts, so any applied coupon already
 		//      reduces the earned amount appropriately)
-		//   3. consume reservations (debit points locked in CRM coupons used here)
+		//   3. consume reservations (debit points locked in CRM-RDM coupons used here)
+		//   4. consume voucher claims (mark used + bump uses_count for CRM vouchers used here)
 		MembershipService::evaluate_tier_upgrade( $user_id );
 		PointsEngine::award_for_order( $order_id );
 		PointsEngine::consume_redemptions_for_order( $order_id );
-
-		// TODO (Vouchers): ClaimHandler::mark_used if a claim coupon was applied.
+		ClaimHandler::consume_for_order( $order_id );
 	}
 
 	public static function on_user_deleted( int $user_id ): void {
 		\ZippyCrm\Models\Membership::delete_for_user( $user_id );
 		PointsSummary::delete_for_user( $user_id );
+		\ZippyCrm\Models\VoucherClaim::delete_for_user( $user_id );
+		NotifSub::delete_for_user( $user_id );
 		// crm_points_ledger rows are kept for audit history.
 		MembershipService::invalidate( $user_id );
 		PointsEngine::invalidate( $user_id );
+		ClaimHandler::invalidate_user_cache( $user_id );
+		SubsManager::invalidate( $user_id );
 	}
 }

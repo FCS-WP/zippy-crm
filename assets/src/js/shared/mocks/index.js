@@ -14,12 +14,23 @@ const LIVE_ROUTES = new Set([
 	"GET /points/me",
 	"GET /points/ledger",
 	"POST /points/redeem",
+	"GET /vouchers",
+	"GET /vouchers/claims",
+	"GET /notifications/preferences",
+	"PUT /notifications/preferences",
 ]);
+
+// Path prefixes that should hit the real backend (for routes with `{id}` etc).
+const LIVE_PREFIXES = [
+	"POST /vouchers/", // /vouchers/{id}/claim
+];
 
 export function shouldMock(method, path) {
 	if (!USE_MOCKS) return false;
 	const key = `${method} ${path.split("?")[0]}`;
-	return !LIVE_ROUTES.has(key);
+	if (LIVE_ROUTES.has(key)) return false;
+	if (LIVE_PREFIXES.some((p) => key.startsWith(p))) return false;
+	return true;
 }
 
 const delay = (ms = 250) => new Promise((r) => setTimeout(r, ms));

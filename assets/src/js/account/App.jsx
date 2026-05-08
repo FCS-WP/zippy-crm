@@ -1,11 +1,13 @@
 import MembershipTab from "./membership/MembershipTab.jsx";
 import PointsTab from "./points/PointsTab.jsx";
+import VouchersTab from "./vouchers/VouchersTab.jsx";
+import NotificationsTab from "./notifications/NotificationsTab.jsx";
 
 const TABS = {
 	membership:    MembershipTab,
 	points:        PointsTab,
-	vouchers:      Placeholder("Vouchers"),
-	notifications: Placeholder("Notifications"),
+	vouchers:      VouchersTab,
+	notifications: NotificationsTab,
 };
 
 export default function App({ tab }) {
@@ -16,14 +18,4 @@ export default function App({ tab }) {
 			<Component />
 		</div>
 	);
-}
-
-function Placeholder(label) {
-	return function PlaceholderTab() {
-		return (
-			<div className="zc-rounded-xl zc-border zc-border-dashed zc-border-zinc-300 zc-p-10 zc-text-center zc-text-sm zc-text-zinc-500">
-				{label} tab — coming next.
-			</div>
-		);
-	};
 }

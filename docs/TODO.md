@@ -123,37 +123,43 @@
 ## 3. Vouchers
 
 ### UI (customer)
-- [x] Mock data shape (`shared/mocks/vouchers.js`) — available + claims
-- [ ] `VouchersTab` with two sub-tabs: Available · My Claims
-- [ ] `VoucherCard` (available) — title, value, expiry, Claim button
-- [ ] `ClaimCard` (claimed) — code (copy button), status pill, used/expired/active
-- [ ] Optimistic claim mutation + error toast (use error codes from spec §3.5)
+- [x] Mock data shape (`shared/mocks/vouchers.js`)
+- [x] `VouchersTab` with two sub-tabs (Available / My Claims) and pill-toggle
+- [x] `VoucherCard` (available) — gradient discount stripe, claim button, copy-code success
+- [x] `ClaimsList` + `ClaimRow` — status badge, copy button when usable, sorted by status
+- [x] Wire to real REST (`/vouchers`, `/vouchers/claims`, `/vouchers/{id}/claim` via `LIVE_PREFIXES`)
+- [x] Empty + error states for both sub-tabs
 
 ### Database
-- [ ] `Schema/crm_vouchers.sql` — `idx_status_expiry`
-- [ ] `Schema/crm_voucher_claims.sql` — `UNIQUE (voucher_id, user_id)`
+- [x] `Schema/crm_vouchers.sql` — `uq_code`, `idx_status_expiry`
+- [x] `Schema/crm_voucher_claims.sql` — `UNIQUE (voucher_id, user_id)` + `idx_user`/`idx_voucher`
 
 ### Model + Service
-- [ ] `Models/Voucher` — `find`, `find_by_code`, `list_active_unclaimed`, `increment_uses`
-- [ ] `Models/VoucherClaim` — `claim` (handles UNIQUE race), `find_for_user`, `mark_used`
-- [ ] `Services/VoucherService` — `create`, `publish` (creates WC coupon), `pause`, `resume`
-- [ ] `Services/ClaimHandler::validate()` order: active → expiry → quota → not-claimed → not-suspended
+- [x] `Models/Voucher` — `find`, `find_by_code`, `list_available_for_user`, `create`, `update_status`, `increment_uses`
+- [x] `Models/VoucherClaim` — `claim` (UNIQUE-collision aware), `list_for_user`, `find_for_user`, `mark_used`
+- [x] `Services/VoucherService` — `publish`, `pause`, `resume`, `sync_wc_coupon` (idempotent)
+- [x] `Services/ClaimHandler` — validate (per spec §3.5 order), `claim`, `consume_for_order`
+- [x] `crm_pre_claim_voucher` filter wired for extension
 
 ### REST
-- [ ] `GET /vouchers` (customer-facing, available unclaimed)
-- [ ] `GET /vouchers/claims`
-- [ ] `POST /vouchers/{id}/claim`
-- [ ] Admin CRUD: `GET|POST /admin/vouchers`, `PUT|DELETE /admin/vouchers/{id}`
+- [x] `GET /vouchers` — available-unclaimed list
+- [x] `GET /vouchers/claims` — user's claims with voucher metadata joined
+- [x] `POST /vouchers/{id}/claim` — auto-applies to cart if one exists, else returns code
+- [x] Error codes per spec: `voucher_inactive`, `voucher_expired`, `quota_exceeded`, `already_claimed`, `account_suspended`
+- [x] HTTP status mapping: 400/403/409/410 by code
+- [ ] Admin CRUD — stubbed, implemented in Admin slice
 
 ### Hooks
-- [ ] On voucher publish → fire `crm_voucher_published` → kick off notification batches
-- [ ] On order completed → if claimed-coupon was applied, mark claim `used` + bump `uses_count`
-- [ ] Daily cron `crm_expire_old_voucher_claims`
+- [x] `woocommerce_order_status_completed` → `ClaimHandler::consume_for_order` (mark used + bump uses_count)
+- [x] `delete_user` → cleanup user's claims + cache
+- [x] `crm_voucher_published` action fires on publish — Notifications listener TBD
+- [ ] Daily cron `crm_expire_old_voucher_claims` (deferred — claims expire via voucher's `expires_at` filter in SQL)
 
 ### Performance
-- [ ] List query uses `idx_status_expiry`
-- [ ] `EXPLAIN` the available-unclaimed JOIN before merging
-- [ ] Cache "available" list per-user; invalidate on publish/pause/claim
+- [x] List query joins claims via `LEFT JOIN ... uq_claim` — single seek per row
+- [x] All filters use `idx_status_expiry` + `uq_code` + `idx_user`
+- [x] No N+1 on My Claims (single JOIN'd query)
+- [ ] Cache "available" list per-user (deferred — list is small, 1-3 indexed seeks; revisit if it shows up in Query Monitor)
 
 ---
 
@@ -161,39 +167,41 @@
 
 ### UI (customer)
 - [x] Mock data shape (`shared/mocks/notifications.js`)
-- [ ] `NotificationsTab` — two switches (vouchers, points), Save button
-- [ ] Optimistic update + revert on error
+- [x] `NotificationsTab` — two channel toggles, Save button, dirty/saved hint
+- [x] `ChannelToggle` (uses new `shared/ui/switch.jsx` primitive)
+- [x] `NotificationsSkeleton` for loading state
+- [x] "All channels off" amber notice when both switches are off
+- [x] Wire to real REST (`GET|PUT /notifications/preferences` in `LIVE_ROUTES`)
 
 ### Registration form
-- [ ] `woocommerce_register_form` action: render two checkboxes (vouchers, points)
-- [ ] `woocommerce_created_customer`: read POST + insert `crm_notif_subs` row
+- [x] `woocommerce_register_form` → `SubsManager::render_optin_field()` (both checked by default per spec §4.1)
+- [x] `woocommerce_created_customer` → `SubsManager::on_customer_created()` reads POST + upserts `crm_notif_subs`
+- [x] Sticky checkbox state on form redisplay after error
 
 ### Database
-- [ ] `Schema/crm_notif_subs.sql`
-- [ ] `Schema/crm_notification_log.sql` — `UNIQUE (voucher_id, user_id)`
+- [x] `Schema/crm_notif_subs.sql` — PK = user_id, idx_subscribed_vouchers, idx_subscribed_points
+- [ ] `Schema/crm_notification_log.sql` — deferred to email-infra slice
 
 ### Model + Service
-- [ ] `Models/NotifSub` — `get_for_user`, `upsert`, `query_subscribed_user_ids` (via `.sql` file)
-- [ ] `Models/NotificationLog` — `log_sent`, `log_failed`, `find_failed_for_retry`
-- [ ] `Services/SubsManager` — render + save opt-in fields, update prefs
-- [ ] `Services/NotifEngine`:
-  - [ ] `queue_voucher_published($voucher_id)` — splits into `ZIPPY_CRM_EMAIL_BATCH_SIZE` chunks
-  - [ ] `dispatch_batch` (cron handler) — sends + writes log idempotently
-  - [ ] `retry_failed` (hourly cron) — up to 3 attempts
+- [x] `Models/NotifSub` — `get_for_user` (returns DEFAULTS if missing), `upsert` (atomic UPSERT), `delete_for_user`
+- [x] `Services/SubsManager` — `get_for_user` (cached), `update_preferences`, `render_optin_field`, `on_customer_created`
+- [ ] `Models/NotificationLog` + `NotifEngine` — deferred to email-infra slice
 
 ### REST
-- [ ] `GET /notifications/preferences`
-- [ ] `PUT /notifications/preferences`
+- [x] `GET /notifications/preferences` — returns defaults when no row exists
+- [x] `PUT /notifications/preferences` — atomic upsert via SubsManager
 
-### Email template
-- [ ] `src/Views/emails/voucher-notification.php` — subject, body, CTA, unsubscribe link
-- [ ] Self-contained (no shared header/footer), inline styles, table layout
-- [ ] Unsubscribe link routes to `/my-account/crm-notifications/`
+### Email template + dispatch (deferred — separate slice)
+- [ ] `src/Views/emails/voucher-notification.php`
+- [ ] `NotifEngine::dispatch_batch` + `retry_failed`
+- [ ] `crm_voucher_published` listener → batch queue
+- [ ] Subscriber query with `NOT IN (notification_log)` filter
+- [ ] Self-contained HTML email, table layout, unsubscribe link
 
 ### Performance
-- [ ] Subscriber query uses `NOT IN (notification_log)` to skip already-sent
-- [ ] Batch via `wp_schedule_single_event`, never inline in the publish request
-- [ ] `UNIQUE` constraint is the idempotency guard — never bypass it
+- [x] Cache `notif_subs:{user_id}` via `Support/Cache`; invalidate on every save + on registration
+- [x] PK = user_id (no surrogate id needed for 1-row-per-user table)
+- [x] `idx_subscribed_*` indexes ready for the future "who do I email?" batch query
 
 ---
 

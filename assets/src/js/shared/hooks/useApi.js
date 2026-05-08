@@ -18,14 +18,19 @@ export function useApiQuery(path, { params, ...options } = {}) {
 
 export function useApiMutation(method, path, options = {}) {
 	const qc = useQueryClient();
+	const { invalidate, onSuccess: userOnSuccess, ...rest } = options;
+
+	// Pull invalidate + onSuccess out of options BEFORE the spread, then put
+	// our wrapper last so it isn't clobbered by the user's onSuccess. The
+	// user's onSuccess still fires — we call it after invalidation runs.
 	return useMutation({
 		mutationFn: (body) => api[method](path, body),
+		...rest,
 		onSuccess: (...args) => {
-			if (options.invalidate) {
-				options.invalidate.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+			if (invalidate) {
+				invalidate.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
 			}
-			options.onSuccess?.(...args);
+			userOnSuccess?.(...args);
 		},
-		...options,
 	});
 }

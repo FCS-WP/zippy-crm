@@ -18,6 +18,9 @@ final class Installer {
 		'crm_memberships.sql',
 		'crm_points_ledger.sql',
 		'crm_points_summary.sql',
+		'crm_vouchers.sql',
+		'crm_voucher_claims.sql',
+		'crm_notif_subs.sql',
 	];
 
 	public static function run(): void {
