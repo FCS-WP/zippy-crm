@@ -18,11 +18,18 @@ final class QueryLoader {
 	private static array $cache = [];
 
 	public static function query( string $relative ): string {
-		return self::load( 'Queries/' . ltrim( $relative, '/' ) );
+		// Both dbDelta() and $wpdb->prepare() choke on leading `-- ...` SQL
+		// comments — dbDelta feeds them back to MySQL, prepare() returns ''.
+		// Strip them everywhere so .sql files can carry documentation safely.
+		return self::strip_comments( self::load( 'Queries/' . ltrim( $relative, '/' ) ) );
 	}
 
 	public static function schema( string $relative ): string {
-		return self::load( 'Schema/' . ltrim( $relative, '/' ) );
+		return self::strip_comments( self::load( 'Schema/' . ltrim( $relative, '/' ) ) );
+	}
+
+	private static function strip_comments( string $sql ): string {
+		return (string) preg_replace( '/^\s*--[^\n]*\n/m', '', $sql );
 	}
 
 	private static function load( string $relative ): string {
@@ -37,7 +44,11 @@ final class QueryLoader {
 
 		global $wpdb;
 		$sql = (string) file_get_contents( $path );
-		$sql = str_replace( '{prefix}', $wpdb->prefix, $sql );
+		$sql = str_replace(
+			[ '{prefix}', '{charset_collate}' ],
+			[ $wpdb->prefix, $wpdb->get_charset_collate() ],
+			$sql
+		);
 
 		return self::$cache[ $relative ] = $sql;
 	}

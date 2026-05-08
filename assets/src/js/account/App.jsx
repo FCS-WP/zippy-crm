@@ -1,8 +1,9 @@
 import MembershipTab from "./membership/MembershipTab.jsx";
+import PointsTab from "./points/PointsTab.jsx";
 
 const TABS = {
 	membership:    MembershipTab,
-	points:        Placeholder("Points"),
+	points:        PointsTab,
 	vouchers:      Placeholder("Vouchers"),
 	notifications: Placeholder("Notifications"),
 };

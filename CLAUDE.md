@@ -2,6 +2,8 @@
 
 > Read this file in full before working on any task in this project.
 >
+> **Track progress in [docs/TODO.md](./docs/TODO.md)** — flip `[ ]` → `[x]` as you finish each item, leave `[~]` while a task is in progress, and add new items there rather than inventing scope mid-task.
+>
 > **Project rules** (read these too — they apply to every change):
 > - [.claude/rules/file-size.md](./.claude/rules/file-size.md) — 500-line cap, where to split
 > - [.claude/rules/sql-files.md](./.claude/rules/sql-files.md) — SQL goes in `.sql` files, not inline

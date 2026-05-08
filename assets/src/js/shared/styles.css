@@ -1,3 +1,14 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Mount-point reset — neutralizes the parent theme's `.woocommerce-MyAccount-content`
+ * which forces `display: flex`. Without these, our React grid collapses to content
+ * width and the right column visibly clips.
+ */
+.zippy-crm-mount {
+	flex: 1 1 auto;
+	width: 100%;
+	min-width: 0;
+}

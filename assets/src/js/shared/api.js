@@ -1,11 +1,12 @@
 // Thin REST client. Reads root + nonce from window.zippyCrm (set by Assets::enqueue_*).
-// While the backend is being built, USE_MOCKS routes calls to the in-memory fixtures.
-import { USE_MOCKS, mockRequest } from "./mocks/index.js";
+// While the backend is being built, mocks/index.js routes some calls to in-memory
+// fixtures and lets others hit the real REST API. See LIVE_ROUTES there.
+import { shouldMock, mockRequest } from "./mocks/index.js";
 
 const cfg = () => window.zippyCrm ?? { root: "/wp-json/zippy-crm/v1/", nonce: "" };
 
 async function request(method, path, body) {
-	if (USE_MOCKS) {
+	if (shouldMock(method, path)) {
 		return mockRequest(method, path, body);
 	}
 

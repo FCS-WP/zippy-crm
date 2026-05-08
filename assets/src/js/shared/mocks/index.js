@@ -2,7 +2,25 @@
 // Each mock fn matches the eventual REST response shape exactly — components
 // never have to know which source they're talking to.
 
+// Master switch — set false to disable mocks globally.
+// Per-route: add the route to LIVE_ROUTES below to send it to the real REST API
+// even while other routes still mock. Lets us flip features one at a time.
 export const USE_MOCKS = true;
+
+// Routes that should hit the real backend, even when USE_MOCKS is true.
+// Match by exact "METHOD /path" for fixed paths, or prefix when the path has params.
+const LIVE_ROUTES = new Set([
+	"GET /membership/me",
+	"GET /points/me",
+	"GET /points/ledger",
+	"POST /points/redeem",
+]);
+
+export function shouldMock(method, path) {
+	if (!USE_MOCKS) return false;
+	const key = `${method} ${path.split("?")[0]}`;
+	return !LIVE_ROUTES.has(key);
+}
 
 const delay = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 
