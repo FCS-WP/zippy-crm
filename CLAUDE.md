@@ -1,8 +1,14 @@
 # CLAUDE.md — WooCommerce CRM Plugin
 
+> **New here?** Read [docs/HANDOFF.md](./docs/HANDOFF.md) first. It's the orientation doc — what's done, what's next, the playbook to follow, and the patterns to reuse.
+>
 > Read this file in full before working on any task in this project.
 >
 > **Track progress in [docs/TODO.md](./docs/TODO.md)** — flip `[ ]` → `[x]` as you finish each item, leave `[~]` while a task is in progress, and add new items there rather than inventing scope mid-task.
+>
+> **Manual QA**:
+> - [docs/TEST_CASES.md](./docs/TEST_CASES.md) — dev-facing cases with `wp eval` setup snippets and DB checks
+> - [docs/QC_TEST_CASES.md](./docs/QC_TEST_CASES.md) — QA-tester-facing cases (UI only, pre-seeded accounts, pass/fail blocks)
 >
 > **Project rules** (read these too — they apply to every change):
 > - [.claude/rules/file-size.md](./.claude/rules/file-size.md) — 500-line cap, where to split

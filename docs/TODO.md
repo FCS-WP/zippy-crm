@@ -147,7 +147,7 @@
 - [x] `POST /vouchers/{id}/claim` — auto-applies to cart if one exists, else returns code
 - [x] Error codes per spec: `voucher_inactive`, `voucher_expired`, `quota_exceeded`, `already_claimed`, `account_suspended`
 - [x] HTTP status mapping: 400/403/409/410 by code
-- [ ] Admin CRUD — stubbed, implemented in Admin slice
+- [x] Admin CRUD — `list/create/update/delete` + `publish/pause/resume/duplicate` + `claims` (see §5 Vouchers)
 
 ### Hooks
 - [x] `woocommerce_order_status_completed` → `ClaimHandler::consume_for_order` (mark used + bump uses_count)
@@ -180,28 +180,34 @@
 
 ### Database
 - [x] `Schema/crm_notif_subs.sql` — PK = user_id, idx_subscribed_vouchers, idx_subscribed_points
-- [ ] `Schema/crm_notification_log.sql` — deferred to email-infra slice
+- [x] `Schema/crm_notification_log.sql` — UNIQUE (voucher_id, user_id), idx_status_attempts, attempts + last_error columns
 
 ### Model + Service
 - [x] `Models/NotifSub` — `get_for_user` (returns DEFAULTS if missing), `upsert` (atomic UPSERT), `delete_for_user`
 - [x] `Services/SubsManager` — `get_for_user` (cached), `update_preferences`, `render_optin_field`, `on_customer_created`
-- [ ] `Models/NotificationLog` + `NotifEngine` — deferred to email-infra slice
+- [x] `Models/NotificationLog` — `insert_queued` (UNIQUE-collision-aware), `mark_sent`, `mark_failed`, `find_failed_for_retry`, `delete_for_user`
+- [x] `Services/NotifEngine` — `on_voucher_published`, `dispatch_batch`, `retry_failed`
 
 ### REST
 - [x] `GET /notifications/preferences` — returns defaults when no row exists
 - [x] `PUT /notifications/preferences` — atomic upsert via SubsManager
 
-### Email template + dispatch (deferred — separate slice)
-- [ ] `src/Views/emails/voucher-notification.php`
-- [ ] `NotifEngine::dispatch_batch` + `retry_failed`
-- [ ] `crm_voucher_published` listener → batch queue
-- [ ] Subscriber query with `NOT IN (notification_log)` filter
-- [ ] Self-contained HTML email, table layout, unsubscribe link
+### Email template + dispatch
+- [x] `src/Views/emails/voucher-notification.php` — self-contained, table-based, inline CSS, no images
+- [x] `NotifEngine::dispatch_batch` + `retry_failed` — three idempotency layers
+- [x] `crm_voucher_published` listener wired in `Hooks/Cron::register`
+- [x] Subscriber query with `NOT IN (notification_log)` filter (`select_unsent_subscribers.sql`)
+- [x] Batches staggered by `ZIPPY_CRM_EMAIL_BATCH_INTERVAL` (5 min default)
+- [x] Failure path bumps `attempts` + stores `last_error`; hourly retry cron picks them up
+- [x] Filter hooks: `crm_voucher_notification_subject`, `crm_voucher_notification_content`
+- [x] Action hooks: `crm_voucher_notifications_queued`, `crm_voucher_notifications_dispatched`
 
 ### Performance
 - [x] Cache `notif_subs:{user_id}` via `Support/Cache`; invalidate on every save + on registration
 - [x] PK = user_id (no surrogate id needed for 1-row-per-user table)
 - [x] `idx_subscribed_*` indexes ready for the future "who do I email?" batch query
+- [x] `idx_status_attempts` covers the retry query
+- [x] `wp_mail` runs in cron, never inline in the publish request
 
 ---
 
@@ -209,40 +215,68 @@
 
 ### Bootstrap
 - [x] Menu registration (`Controllers/Admin/AdminMenu`) + 4 mount controllers (stubs)
-- [ ] `enqueue_admin` already loads `dist/admin.js` on `zippy-crm*` pages — verify after first real panel
+- [x] `enqueue_admin` loads `dist/admin.js` on `zippy-crm*` pages — verified by Vouchers panel
 
 ### Members
-- [ ] `MembersPanel` React app — list + filter (level/status/date), row actions
-- [ ] CSV export endpoint (`GET /admin/members/export`)
-- [ ] Manual "adjust points" modal → `POST /admin/points/adjust`
-- [ ] Manual "change level" modal → `POST /admin/membership/{user_id}/level`
-- [ ] Suspend / activate toggle
+- [x] `MembersPanel` React app — list + filter (level/status), search by login/email/name, row actions
+- [ ] CSV export endpoint (`GET /admin/members/export`) — deferred
+- [x] Manual "adjust points" form → `POST /admin/members/{user_id}/points` (credit/debit + reason; refuses negative balance)
+- [x] Manual "change level" form → `POST /admin/members/{user_id}/level` (admin can set vip; vip stays sticky)
+- [x] Suspend / activate toggle → `POST /admin/members/{user_id}/status`
+- [x] Backend: 3 admin SQL files; extended `Membership` + `MembershipService` + `PointsEngine`; 5 REST routes
+- [x] Mock layer: admin members + points routes added to `LIVE_ROUTES` / `LIVE_PREFIXES`
+- [x] Smoke-tested via `wp eval-file` (16 cases — list/filter/search/level changes incl. vip/suspend/activate/points credit+debit/negative-balance refusal/reason-required/ledger↔summary equality)
+- [x] Member detail drawer (joins WC stats: orders, spend, multiplier)
 
 ### Vouchers
-- [ ] `VouchersPanel` — list, status filters, Quick Stats bar
-- [ ] Create/Edit form (drawer or new page)
-- [ ] Publish / Pause / Resume / Duplicate / Delete (draft-only) actions
-- [ ] Claims subview per voucher
+- [x] `VouchersPanel` — list, status filters, Quick Stats bar
+- [x] Create/Edit form (slide-in drawer; `code` locked once created)
+- [x] Publish / Pause / Resume / Duplicate / Delete (draft + zero-claims only) actions
+- [x] Claims drawer per voucher (joins user data, no N+1)
+- [x] Backend: model + service + REST + 9 SQL files; HPOS-safe; first invariant locked into `Voucher::create`
+- [x] Mock layer: admin voucher routes added to `LIVE_ROUTES` / `LIVE_PREFIXES`
+- [x] Smoke-tested via `wp eval-file` (15 cases, all pass — list/create/dup/bad-payload/update/publish/draft-delete-refusal/pause/resume/duplicate/filter/search/claims/cleanup)
 
 ### Points
-- [ ] `PointsPanel` — summary cards (issued / redeemed / outstanding)
-- [ ] Recent transactions table
-- [ ] Manual adjust form (user search → type → amount → reason)
-- [ ] Bulk recalculate balances action (admin-only, confirms count)
+- [x] `PointsPanel` — summary cards (issued / redeemed / outstanding / members) + outstanding-liability subtitle
+- [x] Recent transactions table (joined with users, type filter, pagination, excludes `pending_redeem`)
+- [x] Manual adjust form — already shipped on the Members panel (`PointsAdjustForm`); reused there to keep one canonical entry point
+- [x] Bulk recalculate balances action — `POST /admin/points/recalculate-all` with confirm + result pill (`processed / drift_corrected / errors`)
+- [x] Backend: 4 admin SQL files; new `Services/PointsAdmin` (split from PointsEngine at the admin/customer responsibility seam); 3 REST routes
+- [x] Cache: `points:system` key shared between PointsEngine (invalidates on every per-user write) and PointsAdmin (read-through cache)
+- [x] Mock layer: admin points routes added to `LIVE_ROUTES`
+- [x] Smoke-tested via `wp eval-file` (8 cases — system_summary equals direct SUM; ledger pagination + type filter + bad-filter 400; pending_redeem excluded; recalculate-all on clean dataset reports zero drift; recalculate-all on synthetic-drift dataset corrects the corrupted balance)
 
 ### Reports
-- [ ] `ReportsPanel` — new members chart, points activity chart, voucher usage chart
-- [ ] Date-range picker
-- [ ] Lazy-load chart lib only when this panel mounts (perf rule)
+- [x] `ReportsPanel` — new members (area), points activity (stacked bars: earned/redeemed/adjusted), voucher claims (line: claimed vs used)
+- [x] Date-range picker — 7/30/90-day presets + custom range with date inputs and Apply button
+- [x] Lazy-load chart lib only when this panel mounts — `Charts` chunk (Recharts + 3 chart components) split out via `import()`; admin.js stayed at ~46 KB, lazy chunk ~395 KB / 115 KB gzipped, only fetched on Reports tab click
+- [x] Backend: 3 admin SQL files; new `Services/ReportsService` with strict YYYY-MM-DD parsing + zero-fill helper; new `Controllers/Rest/ReportsController`; 3 REST routes
+- [x] Mock layer: 3 admin reports routes added to `LIVE_ROUTES`
+- [x] Smoke-tested via `wp eval-file` (8 cases — default 30-day range, custom 7-day range, voucher claims, bad date format 400, inverted range 400, range-too-wide 400, single-day zero-fill, anonymous 401)
 
 ---
 
 ## 6. Cross-cutting
 
+### Audit log (admin write actions)
+- [x] `Schema/crm_audit_log.sql` — `idx_target_created`, `idx_actor_created`, `idx_event_created` (DB v1.6.0)
+- [x] `Models/AuditLog` — `insert`, `get_paginated` with sentinel-pattern filters via `audit/list_paginated.sql` + `audit/count.sql`
+- [x] `Services/AuditLogger` — `EVENT_*` constants, listens to existing `crm_*` actions gated on `is_admin_context()`, plus explicit recorder helpers (`record_voucher_*`, `record_points_adjusted`, `record_points_recalculated`)
+- [x] REST `GET /admin/audit?event=&actor_id=&target_id=&page=&per_page=` — admin-only, sentinel filtering when 0/empty
+- [x] Verified end-to-end: 8 events captured, customer-side `crm_*_changed` actions correctly skipped via context gate
+- [ ] Admin session: wire `AuditLogger::record_voucher_*` calls into `VoucherService::create_draft / update / pause / resume / delete / duplicate` and `record_points_adjusted` into the admin points-adjust handler
+
 ### Security
-- [ ] Every REST route has the right permission callback (user vs `manage_woocommerce`)
-- [ ] All input goes through `Support/Validator` — no inline `is_int` chains
-- [ ] No raw `$wpdb->query()` with concat — all SQL via `QueryLoader` + `prepare()`
+- [x] Audit pass on every REST handler (Membership, Points, Vouchers, Notifications) — see findings below
+- [x] **H1 (high)**: `Voucher::create()` no longer accepts user-supplied `status` — always inserts as 'draft'. Prevents admin-supplied `status=active` from creating CRM vouchers without a matching WC coupon.
+- [x] **H2 (high)**: `Voucher::update()` whitelist no longer includes `status`. Status changes now require `update_status()` (validated enum) or the service-layer publish/pause/resume methods.
+- [x] **L2 (low)**: `RouteRegistrar` now `_doing_it_wrong()`s on unknown auth keyword instead of silently denying — typos in `routes.php` surface in the debug log.
+- [x] **L4 (medium-low)**: Redeem coupon codes bumped 6→12 random chars (36^6 ≈ 2B → 36^12 ≈ 4.7e18). Length is the primary defense because WC doesn't enforce our `_zc_user_id` meta on apply — a guessed code WOULD work at checkout.
+- [x] All REST routes confirmed using correct auth keyword (`user` for customer, `manage_woocommerce` for admin) per `routes.php`
+- [x] All SQL goes through `QueryLoader` + `$wpdb->prepare()` — no concat, no raw `$wpdb->query()` with user input
+- [ ] `Support/Validator` lifted (deferred — only 1 caller (`VoucherService::validate_payload`); promote on third use per shared-components rule)
+- [ ] Rate limiting on `POST /points/redeem` and `POST /vouchers/{id}/claim` (deferred — capability + UNIQUE constraints already prevent abuse beyond DB load)
 
 ### Performance check (every feature, before "done")
 - [ ] No DB query inside a loop in any code path
@@ -259,8 +293,11 @@
 - [ ] Notification batch idempotency — re-running same batch never double-sends
 
 ### DevX
-- [ ] `wp eval` seeders: `seed_members(N)`, `seed_vouchers(N)`, `seed_orders(N)`
-- [ ] README in plugin root with quickstart + endpoint URLs
+- [x] `wp eval` seeders: `seed_members(N)`, `seed_vouchers(N)`, `seed_orders(N)`, `all()`, `reset()` (Support/Seeder.php)
+- [x] `Seeder::seed_qc_fixtures()` — predictable QA accounts (qa-free-1, qa-silver-1, qa-gold-1, qa-vip-1, qa-suspended-1) + 4 named vouchers, idempotent on re-run
+- [x] README at plugin root: quickstart, architecture map, dev commands, REST surface, filters/actions, production checklist
+- [x] `docs/TEST_CASES.md` — dev-facing manual cases (wp eval setup + DB checks)
+- [x] `docs/QC_TEST_CASES.md` — non-technical QA cases (UI-only, pre-seeded accounts, Pass/Fail/Blocked blocks)
 
 ---
 

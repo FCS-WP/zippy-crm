@@ -15,6 +15,7 @@ final class Plugin {
 		// Hooks
 		\ZippyCrm\Hooks\WooCommerce::register();
 		\ZippyCrm\Hooks\Cron::register();
+		\ZippyCrm\Services\AuditLogger::register();
 
 		// Account (frontend My Account tabs)
 		\ZippyCrm\Controllers\Account\AccountController::register();

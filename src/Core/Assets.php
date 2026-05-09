@@ -42,9 +42,8 @@ final class Assets {
 			return;
 		}
 
-		$entry  = $manifest[ $entry_key ];
-		$base   = ZIPPY_CRM_URL . 'assets/dist/';
-		$ver    = ZIPPY_CRM_VERSION;
+		$entry   = $manifest[ $entry_key ];
+		$base    = ZIPPY_CRM_URL . 'assets/dist/';
 		$js_deps = [];
 
 		// Imported shared chunks (e.g. the React + RQ chunk Vite splits out).
@@ -52,21 +51,22 @@ final class Assets {
 			if ( empty( $manifest[ $import_key ]['file'] ) ) {
 				continue;
 			}
+			$file = $manifest[ $import_key ]['file'];
 			$import_handle = $handle . '-' . md5( $import_key );
-			wp_enqueue_script( $import_handle, $base . $manifest[ $import_key ]['file'], [], $ver, true );
+			wp_enqueue_script( $import_handle, $base . $file, [], self::file_ver( $file ), true );
 			$js_deps[] = $import_handle;
 
 			foreach ( (array) ( $manifest[ $import_key ]['css'] ?? [] ) as $css_path ) {
-				wp_enqueue_style( $import_handle . '-css-' . md5( $css_path ), $base . $css_path, [], $ver );
+				wp_enqueue_style( $import_handle . '-css-' . md5( $css_path ), $base . $css_path, [], self::file_ver( $css_path ) );
 			}
 		}
 
 		// Entry's own CSS (rare with our setup, but supported).
 		foreach ( (array) ( $entry['css'] ?? [] ) as $css_path ) {
-			wp_enqueue_style( $handle . '-css-' . md5( $css_path ), $base . $css_path, [], $ver );
+			wp_enqueue_style( $handle . '-css-' . md5( $css_path ), $base . $css_path, [], self::file_ver( $css_path ) );
 		}
 
-		wp_enqueue_script( $handle, $base . $entry['file'], $js_deps, $ver, true );
+		wp_enqueue_script( $handle, $base . $entry['file'], $js_deps, self::file_ver( $entry['file'] ), true );
 
 		// Inline config — read by shared/api.js.
 		wp_add_inline_script(
@@ -120,5 +120,25 @@ final class Assets {
 			'nonce'       => wp_create_nonce( 'wp_rest' ),
 			'currentUser' => get_current_user_id(),
 		];
+	}
+
+	/**
+	 * Cache-busting version for a built asset under assets/dist/. Uses
+	 * filemtime so any rebuild auto-busts without bumping ZIPPY_CRM_VERSION.
+	 *
+	 * Vite's hashed chunk filenames already self-bust on content change; this
+	 * matters most for the unhashed entries (admin.js, account.js, styles.css).
+	 *
+	 * Falls back to the plugin version if the file is missing — defensive,
+	 * shouldn't happen in production.
+	 */
+	private static function file_ver( string $relative ): string {
+		static $cache = [];
+		if ( isset( $cache[ $relative ] ) ) {
+			return $cache[ $relative ];
+		}
+		$path = ZIPPY_CRM_DIR . 'assets/dist/' . ltrim( $relative, '/' );
+		$mtime = is_readable( $path ) ? filemtime( $path ) : false;
+		return $cache[ $relative ] = $mtime ? (string) $mtime : ZIPPY_CRM_VERSION;
 	}
 }

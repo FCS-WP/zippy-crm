@@ -20,6 +20,13 @@ final class PointsEngine {
 
 	private const CACHE_KEY_SUMMARY = 'points:summary:%d';
 
+	/**
+	 * Shared with PointsAdmin so per-user writes (here) and the system summary
+	 * read (there) reference the same cache slot. Public for that reason —
+	 * nothing else should touch this key.
+	 */
+	public const CACHE_KEY_SYSTEM = 'points:system';
+
 	/** Order meta — set when we award, prevents double-credit on status flips. */
 	private const META_AWARDED = '_zc_points_awarded';
 
@@ -202,7 +209,7 @@ final class PointsEngine {
 		}
 
 		$discount = floor( $points / $rate );
-		$code     = self::generate_coupon_code( $user_id );
+		$code     = self::generate_coupon_code();
 		$expires  = time() + DAY_IN_SECONDS;
 
 		$coupon = new \WC_Coupon();
@@ -352,6 +359,9 @@ final class PointsEngine {
 
 	public static function invalidate( int $user_id ): void {
 		Cache::delete( sprintf( self::CACHE_KEY_SUMMARY, $user_id ) );
+		// System-wide totals depend on every per-user balance — any per-user
+		// write must also drop the system cache key.
+		Cache::delete( self::CACHE_KEY_SYSTEM );
 	}
 
 	/* ============================================================
@@ -370,7 +380,17 @@ final class PointsEngine {
 		self::invalidate( $user_id );
 	}
 
-	private static function generate_coupon_code( int $user_id ): string {
-		return strtoupper( sprintf( 'CRM-RDM-%s', wp_generate_password( 6, false, false ) ) );
+	/**
+	 * Coupon code = `CRM-RDM-` + 12 alphanumeric chars. 36^12 ≈ 4.7e18 — far
+	 * beyond brute-force range over the 24-hour coupon lifetime, even for an
+	 * attacker who knows the prefix.
+	 *
+	 * Length matters here because the user-scoping (`_zc_user_id` meta) is
+	 * verified by us, not by WC's apply-coupon path: a successful guess of
+	 * someone else's code WOULD work at checkout. Length is the primary
+	 * defense.
+	 */
+	private static function generate_coupon_code(): string {
+		return strtoupper( sprintf( 'CRM-RDM-%s', wp_generate_password( 12, false, false ) ) );
 	}
 }

@@ -1,6 +1,7 @@
 <?php
 namespace ZippyCrm\Models;
 
+use ZippyCrm\Database\QueryLoader;
 use ZippyCrm\Support\DateTimeHelper;
 
 defined( 'ABSPATH' ) || exit;
@@ -85,5 +86,39 @@ final class PointsSummary {
 	public static function delete_for_user( int $user_id ): void {
 		global $wpdb;
 		$wpdb->delete( self::table(), [ 'user_id' => $user_id ], [ '%d' ] );
+	}
+
+	/* ============================================================
+	 * Admin
+	 * ============================================================ */
+
+	/**
+	 * System-wide totals used by the admin Points panel.
+	 *
+	 * @return array{issued:int, redeemed:int, outstanding:int, members:int}
+	 */
+	public static function system_totals(): array {
+		global $wpdb;
+		$sql = QueryLoader::query( 'admin/points/system_summary.sql' );
+		$row = $wpdb->get_row( $sql, ARRAY_A );
+		return [
+			'issued'      => (int) ( $row['issued']      ?? 0 ),
+			'redeemed'    => (int) ( $row['redeemed']    ?? 0 ),
+			'outstanding' => (int) ( $row['outstanding'] ?? 0 ),
+			'members'     => (int) ( $row['members']     ?? 0 ),
+		];
+	}
+
+	/**
+	 * Every user_id with a points summary row. Source list for
+	 * PointsAdmin::recalculate_all().
+	 *
+	 * @return array<int,int>
+	 */
+	public static function all_user_ids(): array {
+		global $wpdb;
+		$sql = QueryLoader::query( 'admin/points/list_user_ids.sql' );
+		$ids = $wpdb->get_col( $sql );
+		return array_map( 'intval', $ids ?: [] );
 	}
 }

@@ -46,7 +46,9 @@ final class RouteRegistrar {
 
 	/**
 	 * Expand a short auth keyword into a permission_callback closure.
-	 * Custom callables pass through untouched.
+	 * Custom callables pass through untouched. Unknown keywords fail-closed
+	 * (deny all) and trigger _doing_it_wrong so the typo surfaces in the
+	 * developer's debug log rather than silently 401'ing every request.
 	 */
 	private static function resolve_auth( $auth ): callable {
 		if ( is_callable( $auth ) ) {
@@ -57,7 +59,20 @@ final class RouteRegistrar {
 			'user'               => static fn() => is_user_logged_in(),
 			'manage_woocommerce' => static fn() => current_user_can( 'manage_woocommerce' ),
 			'manage_options'     => static fn() => current_user_can( 'manage_options' ),
-			default              => '__return_false',
+			default              => self::deny_with_warning( (string) $auth ),
 		};
+	}
+
+	private static function deny_with_warning( string $auth ): callable {
+		_doing_it_wrong(
+			__METHOD__,
+			sprintf(
+				/* translators: %s: the unknown auth keyword */
+				esc_html__( 'Unknown auth keyword "%s" in src/Core/routes.php — route will deny all requests.', 'zippy-crm' ),
+				esc_html( $auth )
+			),
+			'1.5.0'
+		);
+		return '__return_false';
 	}
 }

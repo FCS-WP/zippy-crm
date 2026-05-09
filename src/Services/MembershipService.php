@@ -156,4 +156,63 @@ final class MembershipService {
 	public static function invalidate( int $user_id ): void {
 		Cache::delete( sprintf( self::CACHE_KEY, $user_id ) );
 	}
+
+	/* ============================================================
+	 * Admin write paths
+	 *
+	 * These bypass the auto-evaluator: an admin can assign vip (which
+	 * evaluate_tier_upgrade refuses to touch) or downgrade a user to free
+	 * even if their lifetime stats would put them higher. Auto-evaluation
+	 * still runs on the next order — but with vip it's sticky, and with
+	 * lower tiers the admin's choice will get overwritten on the next
+	 * qualifying purchase. That's intentional: admin override = manual fix,
+	 * not a permanent ceiling.
+	 *
+	 * Returns true on success and \WP_Error on validation failure.
+	 * ============================================================ */
+
+	public static function set_level_admin( int $user_id, string $level ) {
+		if ( ! in_array( $level, Membership::LEVELS, true ) ) {
+			return new \WP_Error( 'bad_level', __( 'Unknown membership level.', 'zippy-crm' ), [ 'status' => 400 ] );
+		}
+
+		// Auto-seed if missing (handles users created before plugin install).
+		self::get_for_user( $user_id );
+
+		$current = Membership::find_by_user( $user_id )['membership_level'] ?? 'free';
+		if ( $current === $level ) {
+			return true;
+		}
+
+		$ok = Membership::update_level( $user_id, $level );
+		if ( ! $ok ) {
+			return new \WP_Error( 'update_failed', __( 'Could not update membership level.', 'zippy-crm' ), [ 'status' => 500 ] );
+		}
+
+		self::invalidate( $user_id );
+		do_action( 'crm_membership_level_changed', $user_id, $current, $level );
+		return true;
+	}
+
+	public static function set_status_admin( int $user_id, string $status ) {
+		if ( ! in_array( $status, Membership::STATUSES, true ) ) {
+			return new \WP_Error( 'bad_status', __( 'Unknown membership status.', 'zippy-crm' ), [ 'status' => 400 ] );
+		}
+
+		self::get_for_user( $user_id );
+
+		$current = Membership::find_by_user( $user_id )['status'] ?? 'active';
+		if ( $current === $status ) {
+			return true;
+		}
+
+		$ok = Membership::update_status( $user_id, $status );
+		if ( ! $ok ) {
+			return new \WP_Error( 'update_failed', __( 'Could not update membership status.', 'zippy-crm' ), [ 'status' => 500 ] );
+		}
+
+		self::invalidate( $user_id );
+		do_action( 'crm_membership_status_changed', $user_id, $current, $status );
+		return true;
+	}
 }

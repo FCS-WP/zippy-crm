@@ -4,18 +4,21 @@ namespace ZippyCrm\Controllers\Rest;
 use ZippyCrm\Models\Voucher;
 use ZippyCrm\Models\VoucherClaim;
 use ZippyCrm\Services\ClaimHandler;
+use ZippyCrm\Services\VoucherService;
 use ZippyCrm\Support\DateTimeHelper;
 use ZippyCrm\Support\RestResponse;
 
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Routes wired in src/Core/routes.php.
- *
- * Customer routes are live; admin CRUD routes are registered but stubbed —
- * they'll be implemented in the Admin slice.
+ * Routes wired in src/Core/routes.php. Customer + admin handlers live in
+ * one class because the shaping helpers are shared.
  */
 final class VouchersController {
+
+	private const ALLOWED_STATUS_FILTERS = [ 'draft', 'active', 'paused', 'expired' ];
+	private const DEFAULT_PER_PAGE       = 20;
+	private const MAX_PER_PAGE           = 100;
 
 	/* ============================================================
 	 * Customer
@@ -74,13 +77,170 @@ final class VouchersController {
 	}
 
 	/* ============================================================
-	 * Admin (stubbed — implemented in Admin slice)
+	 * Admin
+	 *
+	 * Auth: routes use 'manage_woocommerce' (see Core/routes.php).
+	 * Validation lives in VoucherService — handlers are thin glue.
 	 * ============================================================ */
 
-	public static function admin_list( \WP_REST_Request $r )   { return rest_ensure_response( [ 'items' => [] ] ); }
-	public static function admin_create( \WP_REST_Request $r ) { return rest_ensure_response( [] ); }
-	public static function admin_update( \WP_REST_Request $r ) { return rest_ensure_response( [] ); }
-	public static function admin_delete( \WP_REST_Request $r ) { return rest_ensure_response( [] ); }
+	public static function admin_list( \WP_REST_Request $request ) {
+		$status   = (string) $request->get_param( 'status' );
+		$search   = trim( (string) $request->get_param( 'search' ) );
+		$page     = max( 1, (int) $request->get_param( 'page' ) ?: 1 );
+		$per_page = (int) $request->get_param( 'per_page' ) ?: self::DEFAULT_PER_PAGE;
+		$per_page = max( 1, min( self::MAX_PER_PAGE, $per_page ) );
+
+		if ( $status !== '' && ! in_array( $status, self::ALLOWED_STATUS_FILTERS, true ) ) {
+			return RestResponse::error( 'bad_status_filter', __( 'Unknown status filter.', 'zippy-crm' ), 400 );
+		}
+
+		$rows  = Voucher::list_for_admin( $status, $search, $page, $per_page );
+		$total = Voucher::count_for_admin( $status, $search );
+
+		return RestResponse::ok( [
+			'items'    => array_map( [ self::class, 'shape_voucher_admin' ], $rows ),
+			'total'    => $total,
+			'page'     => $page,
+			'per_page' => $per_page,
+			'counts'   => Voucher::count_by_status(),
+		] );
+	}
+
+	public static function admin_create( \WP_REST_Request $request ) {
+		$user_id = get_current_user_id();
+		$payload = self::extract_voucher_payload( $request );
+
+		$result = VoucherService::create_draft( $payload, $user_id );
+		if ( $result instanceof \WP_Error ) {
+			return $result;
+		}
+		return RestResponse::ok( self::shape_voucher_admin( $result ), 201 );
+	}
+
+	public static function admin_update( \WP_REST_Request $request ) {
+		$id      = (int) $request['id'];
+		$payload = self::extract_voucher_payload( $request );
+
+		$result = VoucherService::update( $id, $payload );
+		if ( $result instanceof \WP_Error ) {
+			return $result;
+		}
+		return RestResponse::ok( self::shape_voucher_admin( $result ) );
+	}
+
+	public static function admin_delete( \WP_REST_Request $request ) {
+		$id     = (int) $request['id'];
+		$result = VoucherService::delete( $id );
+		if ( $result instanceof \WP_Error ) {
+			return $result;
+		}
+		return RestResponse::ok( [ 'deleted' => true, 'id' => $id ] );
+	}
+
+	public static function admin_publish( \WP_REST_Request $request ) {
+		$id = (int) $request['id'];
+		if ( ! VoucherService::publish( $id ) ) {
+			return RestResponse::error( 'voucher_publish_failed', __( 'Could not publish voucher.', 'zippy-crm' ), 400 );
+		}
+		return RestResponse::ok( self::shape_voucher_admin( Voucher::find( $id ) ) );
+	}
+
+	public static function admin_pause( \WP_REST_Request $request ) {
+		$id = (int) $request['id'];
+		if ( ! VoucherService::pause( $id ) ) {
+			return RestResponse::error( 'voucher_pause_failed', __( 'Could not pause voucher.', 'zippy-crm' ), 400 );
+		}
+		return RestResponse::ok( self::shape_voucher_admin( Voucher::find( $id ) ) );
+	}
+
+	public static function admin_resume( \WP_REST_Request $request ) {
+		$id = (int) $request['id'];
+		if ( ! VoucherService::resume( $id ) ) {
+			return RestResponse::error( 'voucher_resume_failed', __( 'Could not resume voucher.', 'zippy-crm' ), 400 );
+		}
+		return RestResponse::ok( self::shape_voucher_admin( Voucher::find( $id ) ) );
+	}
+
+	public static function admin_duplicate( \WP_REST_Request $request ) {
+		$id      = (int) $request['id'];
+		$user_id = get_current_user_id();
+		$result  = VoucherService::duplicate( $id, $user_id );
+		if ( $result instanceof \WP_Error ) {
+			return $result;
+		}
+		return RestResponse::ok( self::shape_voucher_admin( $result ), 201 );
+	}
+
+	public static function admin_list_claims( \WP_REST_Request $request ) {
+		$id = (int) $request['id'];
+		if ( ! Voucher::find( $id ) ) {
+			return RestResponse::error( 'voucher_not_found', __( 'Voucher not found.', 'zippy-crm' ), 404 );
+		}
+		$rows = VoucherClaim::list_for_voucher( $id );
+		return RestResponse::ok( [
+			'items' => array_map( [ self::class, 'shape_admin_claim' ], $rows ),
+		] );
+	}
+
+	/**
+	 * Pulls the editable subset out of the request. Centralized so create and
+	 * update agree on the shape; service layer does the validation.
+	 */
+	private static function extract_voucher_payload( \WP_REST_Request $request ): array {
+		$keys = [
+			'code', 'title', 'description',
+			'discount_type', 'discount_value', 'min_order_amount',
+			'max_uses', 'starts_at', 'expires_at',
+		];
+		$out = [];
+		foreach ( $keys as $key ) {
+			$value = $request->get_param( $key );
+			if ( $value === null ) {
+				continue;
+			}
+			$out[ $key ] = $value === '' ? null : $value;
+		}
+		return $out;
+	}
+
+	private static function shape_voucher_admin( ?array $row ): array {
+		if ( ! $row ) {
+			return [];
+		}
+		$max  = (int) $row['max_uses'];
+		$used = (int) $row['uses_count'];
+		return [
+			'id'               => (int) $row['id'],
+			'code'             => (string) $row['code'],
+			'title'            => (string) $row['title'],
+			'description'      => $row['description'] ?? null,
+			'discount_type'    => (string) $row['discount_type'],
+			'discount_value'   => (float) $row['discount_value'],
+			'min_order_amount' => (float) $row['min_order_amount'],
+			'max_uses'         => $max,
+			'uses_count'       => $used,
+			'remaining_uses'   => $max > 0 ? max( 0, $max - $used ) : null,
+			'status'           => (string) $row['status'],
+			'starts_at'        => DateTimeHelper::mysql_to_iso( $row['starts_at'] ?? null ),
+			'expires_at'       => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
+			'created_by'       => (int) $row['created_by'],
+			'created_at'       => DateTimeHelper::mysql_to_iso( $row['created_at'] ?? null ),
+		];
+	}
+
+	private static function shape_admin_claim( array $row ): array {
+		return [
+			'id'           => (int) $row['claim_id'],
+			'user_id'      => (int) $row['user_id'],
+			'user_login'   => (string) ( $row['user_login']   ?? '' ),
+			'user_email'   => (string) ( $row['user_email']   ?? '' ),
+			'display_name' => (string) ( $row['display_name'] ?? '' ),
+			'status'       => (string) $row['claim_status'],
+			'claimed_at'   => DateTimeHelper::mysql_to_iso( $row['claimed_at'] ?? null ),
+			'used_at'      => DateTimeHelper::mysql_to_iso( $row['used_at']   ?? null ),
+			'order_id'     => $row['order_id'] !== null ? (int) $row['order_id'] : null,
+		];
+	}
 
 	/* ============================================================
 	 * Internal

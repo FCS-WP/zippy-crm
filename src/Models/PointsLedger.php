@@ -145,4 +145,49 @@ final class PointsLedger {
 			'balance'        => (int) ( $row['balance']        ?? 0 ),
 		];
 	}
+
+	/* ============================================================
+	 * Admin
+	 * ============================================================ */
+
+	private const FILTER_ALL = '__all__';
+
+	/** Types the admin recent-ledger filter accepts. Excludes pending_redeem. */
+	public const ADMIN_FILTER_TYPES = [ 'earn', 'redeem', 'expire', 'adjust' ];
+
+	/**
+	 * Recent global ledger rows for the admin Points panel. Joins user data
+	 * inline so the table renders without N+1.
+	 *
+	 * @return array{items: array<int,array<string,mixed>>, total: int, page: int, per_page: int, total_pages: int}
+	 */
+	public static function get_recent_for_admin( string $type, int $page = 1, int $per_page = 20 ): array {
+		$page     = max( 1, $page );
+		$per_page = max( 1, min( 100, $per_page ) );
+		$offset   = ( $page - 1 ) * $per_page;
+
+		$type_active = $type !== '' && in_array( $type, self::ADMIN_FILTER_TYPES, true );
+		$type_token  = $type_active ? $type : self::FILTER_ALL;
+
+		global $wpdb;
+
+		$items_sql = QueryLoader::query( 'admin/points/recent_ledger.sql' );
+		$items     = $wpdb->get_results(
+			$wpdb->prepare( $items_sql, $type_token, $type_token, $per_page, $offset ),
+			ARRAY_A
+		) ?: [];
+
+		$count_sql = QueryLoader::query( 'admin/points/count_recent_ledger.sql' );
+		$total     = (int) $wpdb->get_var(
+			$wpdb->prepare( $count_sql, $type_token, $type_token )
+		);
+
+		return [
+			'items'       => $items,
+			'page'        => $page,
+			'per_page'    => $per_page,
+			'total'       => $total,
+			'total_pages' => $total > 0 ? (int) ceil( $total / $per_page ) : 0,
+		];
+	}
 }

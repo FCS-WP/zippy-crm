@@ -4,6 +4,13 @@ import path from "node:path";
 
 export default defineConfig({
 	plugins: [react()],
+	// `base: "./"` makes Vite emit relative URLs in the dynamic-import deps
+	// table (`__vite__mapDeps`). Default `"/"` would try to fetch lazy chunks
+	// from the site root (`/js/foo.js`), which is wrong because our bundle
+	// lives under /wp-content/plugins/zippy-crm/assets/dist/js/. Without this,
+	// any lazy import (e.g. ReportsPanel + Recharts) silently breaks because
+	// the modulepreload links and import() URLs both 404.
+	base: "./",
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "assets/src"),

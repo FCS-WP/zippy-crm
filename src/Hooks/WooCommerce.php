@@ -62,6 +62,7 @@ final class WooCommerce {
 		PointsSummary::delete_for_user( $user_id );
 		\ZippyCrm\Models\VoucherClaim::delete_for_user( $user_id );
 		NotifSub::delete_for_user( $user_id );
+		\ZippyCrm\Models\NotificationLog::delete_for_user( $user_id );
 		// crm_points_ledger rows are kept for audit history.
 		MembershipService::invalidate( $user_id );
 		PointsEngine::invalidate( $user_id );

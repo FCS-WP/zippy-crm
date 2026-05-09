@@ -18,11 +18,29 @@ const LIVE_ROUTES = new Set([
 	"GET /vouchers/claims",
 	"GET /notifications/preferences",
 	"PUT /notifications/preferences",
+	// Admin
+	"GET /admin/vouchers",
+	"POST /admin/vouchers",
+	"GET /admin/members",
+	"GET /admin/points/summary",
+	"GET /admin/points/ledger",
+	"POST /admin/points/recalculate-all",
+	"GET /admin/reports/members-per-day",
+	"GET /admin/reports/points-activity",
+	"GET /admin/reports/voucher-claims",
 ]);
 
 // Path prefixes that should hit the real backend (for routes with `{id}` etc).
 const LIVE_PREFIXES = [
 	"POST /vouchers/", // /vouchers/{id}/claim
+	// Admin: every per-id voucher route (PUT/DELETE/POST publish/pause/resume/duplicate, GET claims)
+	"PUT /admin/vouchers/",
+	"DELETE /admin/vouchers/",
+	"POST /admin/vouchers/",
+	"GET /admin/vouchers/",
+	// Admin members (per-id GET + POST level/status/points)
+	"GET /admin/members/",
+	"POST /admin/members/",
 ];
 
 export function shouldMock(method, path) {

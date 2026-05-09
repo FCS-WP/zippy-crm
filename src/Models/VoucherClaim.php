@@ -97,4 +97,30 @@ final class VoucherClaim {
 		global $wpdb;
 		$wpdb->delete( self::table(), [ 'user_id' => $user_id ], [ '%d' ] );
 	}
+
+	/* ============================================================
+	 * Admin
+	 * ============================================================ */
+
+	/**
+	 * Number of claims attached to a voucher. Used by VoucherService::delete()
+	 * as a refusal guard (vouchers with claims must not be hard-deleted).
+	 */
+	public static function count_for_voucher( int $voucher_id ): int {
+		global $wpdb;
+		$sql = QueryLoader::query( 'vouchers/admin/claim_count_for_voucher.sql' );
+		return (int) $wpdb->get_var( $wpdb->prepare( $sql, $voucher_id ) );
+	}
+
+	/**
+	 * Claims for a single voucher with user data joined, for the admin drawer.
+	 *
+	 * @return array<int,array<string,mixed>>
+	 */
+	public static function list_for_voucher( int $voucher_id ): array {
+		global $wpdb;
+		$sql  = QueryLoader::query( 'vouchers/admin/list_claims_for_voucher.sql' );
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $voucher_id ), ARRAY_A );
+		return $rows ?: [];
+	}
 }

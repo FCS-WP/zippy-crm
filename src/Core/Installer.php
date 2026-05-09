@@ -21,6 +21,8 @@ final class Installer {
 		'crm_vouchers.sql',
 		'crm_voucher_claims.sql',
 		'crm_notif_subs.sql',
+		'crm_notification_log.sql',
+		'crm_audit_log.sql',
 	];
 
 	public static function run(): void {
