@@ -5,17 +5,17 @@ defined( 'ABSPATH' ) || exit;
 
 final class Assets {
 
-	private const HANDLE_ACCOUNT = 'zippy-crm-account';
-	private const HANDLE_ADMIN   = 'zippy-crm-admin';
-	private const HANDLE_CART    = 'zippy-crm-cart';
+	private const HANDLE_ACCOUNT  = 'zippy-crm-account';
+	private const HANDLE_ADMIN    = 'zippy-crm-admin';
+	private const HANDLE_CHECKOUT = 'zippy-crm-checkout';
 
-	private const ENTRY_ACCOUNT = 'assets/src/js/account/index.jsx';
-	private const ENTRY_ADMIN   = 'assets/src/js/admin/index.jsx';
-	private const ENTRY_CART    = 'assets/src/js/cart/index.jsx';
+	private const ENTRY_ACCOUNT  = 'assets/src/js/account/index.jsx';
+	private const ENTRY_ADMIN    = 'assets/src/js/admin/index.jsx';
+	private const ENTRY_CHECKOUT = 'assets/src/js/checkout/index.jsx';
 
 	public static function register(): void {
 		add_action( 'wp_enqueue_scripts',    [ self::class, 'enqueue_account' ] );
-		add_action( 'wp_enqueue_scripts',    [ self::class, 'enqueue_cart' ] );
+		add_action( 'wp_enqueue_scripts',    [ self::class, 'enqueue_checkout' ] );
 		add_action( 'admin_enqueue_scripts', [ self::class, 'enqueue_admin' ] );
 		add_filter( 'script_loader_tag',     [ self::class, 'as_module' ], 10, 3 );
 	}
@@ -28,18 +28,21 @@ final class Assets {
 	}
 
 	/**
-	 * Cart-page-only enqueue for the points-tender widget. Conditional on
-	 * `is_cart()` so the bundle never loads on shop / product / checkout
-	 * pages — keeps the perf cost bounded to the one place the widget renders.
+	 * Checkout-page-only enqueue for the points-tender widget. Conditional on
+	 * `is_checkout()` so the bundle never loads on shop / product / cart pages —
+	 * keeps the perf cost bounded to the one place the widget renders.
+	 *
+	 * v1.13.0: moved off the cart page. Customers decide redemption against
+	 * the final number (with shipping/tax) rather than the cart subtotal.
 	 */
-	public static function enqueue_cart(): void {
-		if ( ! function_exists( 'is_cart' ) || ! is_cart() ) {
+	public static function enqueue_checkout(): void {
+		if ( ! function_exists( 'is_checkout' ) || ! is_checkout() ) {
 			return;
 		}
 		if ( ! is_user_logged_in() ) {
 			return; // guests have no points balance to spend
 		}
-		self::enqueue_entry( self::HANDLE_CART, self::ENTRY_CART );
+		self::enqueue_entry( self::HANDLE_CHECKOUT, self::ENTRY_CHECKOUT );
 	}
 
 	public static function enqueue_admin( string $hook ): void {

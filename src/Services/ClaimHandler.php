@@ -217,6 +217,32 @@ final class ClaimHandler {
 		return $consumed;
 	}
 
+	/**
+	 * Called from WooCommerce::on_order_cancelled. The order had a CRM
+	 * voucher coupon applied but the customer never paid through.
+	 *
+	 * Per product decision (v1.13.0): the customer KEEPS their claim. Their
+	 * code still works — they can apply it on a new order. Reverting the
+	 * claim here would punish hesitant buyers and is the wrong tradeoff for
+	 * a loyalty program.
+	 *
+	 * What this function actually does is defensive cleanup for a case that
+	 * shouldn't happen in current code: if `consume_for_order` had already
+	 * run on this order (status went completed → cancelled in some weird
+	 * flow), we'd want to roll back the `used` markers. The caller
+	 * (WooCommerce::on_order_cancelled) bails when META_SETTLED='1', so this
+	 * is currently a no-op. Kept as a stub so future settled-then-cancelled
+	 * paths have a hook to plug into.
+	 *
+	 * @return int number of claim rows reverted (always 0 today)
+	 */
+	public static function release_for_order( int $order_id ): int {
+		// Nothing to do. See docblock — claims are intentionally NOT reverted
+		// on cancel; consume_for_order hasn't run; there's no DB drift.
+		unset( $order_id );
+		return 0;
+	}
+
 	public static function invalidate_user_cache( int $user_id ): void {
 		Cache::delete( sprintf( self::CACHE_KEY_AVAILABLE, $user_id ) );
 	}

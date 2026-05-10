@@ -58,11 +58,20 @@ final class VoucherClaim {
 		return -1;
 	}
 
-	/** @return array<int,array<string,mixed>> */
+	/**
+	 * Active claims only — list_my_claims.sql now hides expired/used/paused.
+	 * Pass site-now in UTC mysql format to match how voucher.expires_at is
+	 * stored.
+	 *
+	 * @return array<int,array<string,mixed>>
+	 */
 	public static function list_for_user( int $user_id ): array {
 		global $wpdb;
 		$sql  = QueryLoader::query( 'vouchers/list_my_claims.sql' );
-		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $user_id ), ARRAY_A );
+		$rows = $wpdb->get_results(
+			$wpdb->prepare( $sql, $user_id, DateTimeHelper::now_mysql() ),
+			ARRAY_A
+		);
 		return $rows ?: [];
 	}
 

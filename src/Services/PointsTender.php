@@ -55,6 +55,9 @@ final class PointsTender {
 	/** Order meta — points already credited back via refund (cumulative). */
 	public const META_REFUNDED = '_zc_points_refunded';
 
+	/** Order meta — set by revert_for_order so cancel hook is idempotent. */
+	public const META_REVERTED = '_zc_points_reverted';
+
 	/* ============================================================
 	 * Hook registration (called from Plugin::boot via Hooks/WooCommerce)
 	 * ============================================================ */
@@ -350,6 +353,60 @@ final class PointsTender {
 	/* ============================================================
 	 * Refund crediting
 	 * ============================================================ */
+
+	/**
+	 * Called from WooCommerce::on_order_cancelled (order_status_cancelled or
+	 * _failed). The order was created and the customer applied points to it,
+	 * but they never paid through. Two things to clean up:
+	 *
+	 *   1. **Order meta** — the `_zc_points_applied` value is left in place
+	 *      for audit. It's marked "reverted" so a subsequent cancel hook
+	 *      (re-fire on edge cases) is a no-op.
+	 *
+	 *   2. **Customer's pending tender state** — only if the user_meta /
+	 *      session still match THIS order's value (defensive: if they've
+	 *      already moved on to a new order with different applied points,
+	 *      we don't want to wipe that). The normal flow cleared this in
+	 *      persist_to_order(); this function is the belt to that suspenders.
+	 *
+	 * No ledger row is needed — the points were never debited (settle only
+	 * fires on completed orders, gated by META_SETTLED). If the order DID
+	 * settle (cancelled-after-completion is rare but possible), the caller
+	 * already bailed in WooCommerce::on_order_cancelled.
+	 *
+	 * Idempotent — META_REVERTED guards against double-fire.
+	 */
+	public static function revert_for_order( int $order_id ): void {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return;
+		}
+		if ( $order->get_meta( self::META_REVERTED ) === '1' ) {
+			return;
+		}
+
+		$applied = (int) $order->get_meta( self::META_APPLIED );
+		if ( $applied <= 0 ) {
+			return; // no points were applied to this order
+		}
+
+		$user_id = (int) $order->get_customer_id();
+		if ( $user_id > 0 ) {
+			// Defensive: only clear if the user's pending state still matches
+			// this order's value. If they've already started a new checkout
+			// with a different amount, leave that alone.
+			$current = (int) get_user_meta( $user_id, self::USER_META_APPLIED, true );
+			if ( $current === $applied ) {
+				delete_user_meta( $user_id, self::USER_META_APPLIED );
+			}
+			if ( WC()->session && (int) WC()->session->get( self::SESSION_KEY, 0 ) === $applied ) {
+				WC()->session->__unset( self::SESSION_KEY );
+			}
+		}
+
+		$order->update_meta_data( self::META_REVERTED, '1' );
+		$order->save();
+	}
 
 	/**
 	 * Hook target: woocommerce_order_refunded.

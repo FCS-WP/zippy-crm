@@ -23,6 +23,7 @@ final class Plugin {
 		\ZippyCrm\Hooks\Cron::register();
 		\ZippyCrm\Hooks\VoucherHourWindow::register();
 		\ZippyCrm\Hooks\MembershipTierRevoker::register();
+		\ZippyCrm\Hooks\WcCouponDelete::register();
 		\ZippyCrm\Services\AuditLogger::register();
 		\ZippyCrm\Services\PointsTender::register();
 

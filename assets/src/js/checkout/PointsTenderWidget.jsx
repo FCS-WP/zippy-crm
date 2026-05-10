@@ -170,24 +170,30 @@ function ApplyForm({ max, min, rate, onApply, applying, error }) {
 }
 
 /**
- * Asks every interested party to re-read the cart so the new fee line shows
- * up without a full page reload. Two audiences:
+ * Asks every interested party to re-read the cart/checkout so the new fee
+ * line shows up without a full page reload.
  *
- *   1. **ai-zippy theme React cart** (primary) — listens to the custom DOM
- *      event `zippy-crm:cart-tender-changed`. The theme's CartApp re-fetches
- *      via WC Store API on this event.
+ *   1. **ai-zippy theme React checkout** (primary) — listens to the custom
+ *      DOM event `zippy-crm:tender-changed`. The theme's CheckoutApp re-fetches
+ *      cart data via WC Store API on this event.
  *
- *   2. **WC blocks-based cart** — handled implicitly: the Store API client
- *      revalidates cached cart data on most user interactions. We don't
- *      need to trigger anything for this one.
+ *   2. **WC blocks-based checkout** — handled implicitly: the Store API
+ *      client revalidates cached cart data on most user interactions. We
+ *      don't need to trigger anything for this one.
  *
- * Classic WC PHP cart isn't a target here — that path goes through page
- * reloads anyway. We previously fired jQuery `update_checkout` /
- * `wc_update_cart` events as a "be polite to WC core" gesture, but on a
- * site whose theme has replaced the PHP cart entirely, those triggers can
- * collide with WC's cart-fragments handler in unexpected ways (ranged from
- * console errors to full-page reloads). Removed.
+ *   3. **Classic WC PHP checkout** — fires the `update_checkout` jQuery event
+ *      so WC's own checkout fragments re-render with the new fee line. This
+ *      is the standard WC convention; safe even when no listener is wired.
+ *
+ * Event name: `zippy-crm:tender-changed` (was `zippy-crm:cart-tender-changed`
+ * before v1.13.0 — renamed when redemption moved off the cart page).
  */
 function triggerCartRefresh() {
-	window.dispatchEvent(new CustomEvent("zippy-crm:cart-tender-changed"));
+	window.dispatchEvent(new CustomEvent("zippy-crm:tender-changed"));
+
+	// Classic WC checkout listens to this jQuery event to recompute totals.
+	// jQuery is loaded on the WC checkout page; bail safely if absent.
+	if (typeof window.jQuery === "function") {
+		window.jQuery(document.body).trigger("update_checkout");
+	}
 }

@@ -156,20 +156,27 @@ A few non-obvious decisions worth knowing:
 
 We've built up a workflow that catches regressions early. Use it:
 
-### Run a quick end-to-end test against the live container
+### Manual QA scripts live in `tests/manual/`
 
-Drop a PHP test file in `/tmp/` and run via `wp eval-file`. Example pattern from [tmp/zc-test-vouchers.php](../../../../tmp/zc-test-vouchers.php):
+**Before writing a new `wp eval-file` script, check [tests/manual/](../tests/manual/) — there's likely already one for the feature you're touching.** The folder's [README](../tests/manual/README.md) lists every script with a one-line purpose; if one almost-fits, edit it rather than reinventing.
+
+Run pattern (copy in, eval-file out):
 
 ```bash
-docker compose cp /tmp/zc-test-{feature}.php wordpress:/tmp/zc-test-{feature}.php
-docker compose exec -T --user www-data wordpress sh -lc 'wp eval-file /tmp/zc-test-{feature}.php'
+docker compose cp src/wp-content/plugins/zippy-crm/tests/manual/zc-test-{name}.php \
+  wordpress:/tmp/zc-test-{name}.php
+docker compose exec -T --user www-data wordpress sh -lc \
+  'wp eval-file /tmp/zc-test-{name}.php' 2>&1 | grep -v 'PHP Warning'
 ```
 
-Inside the test:
-1. Set the user: `wp_set_current_user(1);`
-2. Hit the REST endpoint(s) via `WP_REST_Request` + `rest_do_request`
-3. Print the result, check the DB directly to confirm side effects
+Inside a test script:
+1. Pick an admin user via `get_users(['role'=>'administrator','number'=>1])` + `wp_set_current_user` — don't hardcode user IDs
+2. Hit endpoints via `WP_REST_Request` + `rest_do_request` (exercises the real route registrar + permission callbacks)
+3. Print one numbered case header per assertion — easy to scan a failed run
 4. **Always test the negative cases** — duplicates, expired, race re-fires, idempotency
+5. **Clean up at the end** so re-runs don't accumulate orphaned data
+
+When you write a new script, **commit it back to `tests/manual/`** so the next session benefits — don't leave it in `/tmp`.
 
 ### Diagnostic noise to ignore
 

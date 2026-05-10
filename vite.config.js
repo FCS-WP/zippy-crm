@@ -22,9 +22,9 @@ export default defineConfig({
 		emptyOutDir: true,
 		rollupOptions: {
 			input: {
-				admin:   path.resolve(__dirname, "assets/src/js/admin/index.jsx"),
-				account: path.resolve(__dirname, "assets/src/js/account/index.jsx"),
-				cart:    path.resolve(__dirname, "assets/src/js/cart/index.jsx"),
+				admin:    path.resolve(__dirname, "assets/src/js/admin/index.jsx"),
+				account:  path.resolve(__dirname, "assets/src/js/account/index.jsx"),
+				checkout: path.resolve(__dirname, "assets/src/js/checkout/index.jsx"),
 			},
 			output: {
 				entryFileNames: "js/[name].js",

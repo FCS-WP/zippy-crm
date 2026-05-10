@@ -6,6 +6,7 @@ use ZippyCrm\Models\PointsSummary;
 use ZippyCrm\Services\ClaimHandler;
 use ZippyCrm\Services\MembershipService;
 use ZippyCrm\Services\PointsEngine;
+use ZippyCrm\Services\PointsTender;
 use ZippyCrm\Services\SubsManager;
 
 defined( 'ABSPATH' ) || exit;
@@ -20,20 +21,33 @@ final class WooCommerce {
 		// Tier evaluation + points (Points engine TODO)
 		add_action( 'woocommerce_order_status_completed', [ self::class, 'on_order_completed' ] );
 
-		// Cart page: mount-point for the points-tender widget. Renders just
-		// above the totals box so the user sees "Use points" before they see
-		// what they owe. The empty <div> is hydrated by the cart bundle.
-		add_action( 'woocommerce_before_cart_totals',     [ self::class, 'render_cart_points_mount' ] );
+		// Order didn't pay through. WC's "hold stock" feature auto-cancels
+		// pending orders after the configured timeout (Settings → Products →
+		// Inventory). Admins can also cancel manually. In both cases we want
+		// to release whatever the customer reserved against this order:
+		//   - applied points (user_meta + session) so they get a clean slate
+		//   - multi-code voucher slots (assigned → available) so other
+		//     qualifying customers can still claim them
+		// Failed orders fire a parallel cleanup — same logic, different status.
+		add_action( 'woocommerce_order_status_cancelled', [ self::class, 'on_order_cancelled' ] );
+		add_action( 'woocommerce_order_status_failed',    [ self::class, 'on_order_cancelled' ] );
+
+		// Checkout page: mount-point for the points-tender widget. Renders
+		// just above the payment methods so the user decides redemption
+		// against the final number (with shipping/tax). The empty <div> is
+		// hydrated by the checkout bundle.
+		// v1.13.0: moved from `woocommerce_before_cart_totals`.
+		add_action( 'woocommerce_review_order_before_payment', [ self::class, 'render_checkout_points_mount' ] );
 
 		// Cleanup on user delete
 		add_action( 'delete_user',                        [ self::class, 'on_user_deleted' ] );
 	}
 
-	public static function render_cart_points_mount(): void {
+	public static function render_checkout_points_mount(): void {
 		if ( ! is_user_logged_in() ) {
 			return;
 		}
-		echo '<div id="zippy-crm-cart-points" class="zippy-crm-mount"></div>';
+		echo '<div id="zippy-crm-checkout-points" class="zippy-crm-mount"></div>';
 	}
 
 	public static function on_customer_created( int $user_id, array $data = [], bool $password_generated = false ): void {
@@ -72,6 +86,41 @@ final class WooCommerce {
 		MembershipService::evaluate_tier_upgrade( $user_id );
 		PointsEngine::award_for_order( $order_id );
 		ClaimHandler::consume_for_order( $order_id );
+	}
+
+	/**
+	 * Hook target: woocommerce_order_status_cancelled, _failed.
+	 *
+	 * The customer never paid through. Two things to revert:
+	 *   1. Applied points stored against the order (`_zc_points_applied` meta) —
+	 *      these were never debited from the balance, but the user_meta /
+	 *      session still holds the "I plan to apply N points" intent. Clear
+	 *      it so the next checkout starts clean.
+	 *   2. Multi-code voucher slots — the customer claimed a code, applied
+	 *      it to the order, then the order died. Release the code back to
+	 *      `available` so other qualifying customers can claim it.
+	 *
+	 * Idempotent: status transitions can fire more than once on edge cases
+	 * (e.g. cancelled then re-cancelled via admin tools); both reverts use
+	 * conditional UPDATEs so a second call is a no-op.
+	 */
+	public static function on_order_cancelled( int $order_id ): void {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return;
+		}
+
+		// Skip orders that already settled (i.e. went completed → refunded →
+		// cancelled). The credit-back path on refund handled those points;
+		// running the revert here would double-credit. The order's
+		// _zc_points_settled meta is the canonical "we awarded points
+		// already" marker — bail if it's set.
+		if ( $order->get_meta( PointsTender::META_SETTLED ) !== '' ) {
+			return;
+		}
+
+		PointsTender::revert_for_order( $order_id );
+		ClaimHandler::release_for_order( $order_id );
 	}
 
 	public static function on_user_deleted( int $user_id ): void {
