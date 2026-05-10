@@ -18,8 +18,21 @@ final class WooCommerce {
 		add_action( 'woocommerce_created_customer',       [ self::class, 'on_customer_created' ], 10, 3 );
 		add_action( 'woocommerce_register_form',          [ self::class, 'render_optin_field' ] );
 
-		// Tier evaluation + points (Points engine TODO)
-		add_action( 'woocommerce_order_status_completed', [ self::class, 'on_order_completed' ] );
+		// Voucher consume + points earn + tier evaluation fire on BOTH
+		// `processing` and `completed`:
+		//   - processing: customer paid through, voucher is "spent" from
+		//                 their POV, points earn should reflect immediately.
+		//                 Most stores (digital + standard physical) send
+		//                 orders here on payment success.
+		//   - completed:  fallback for stores that skip processing (some COD,
+		//                 manual gateways) or for orders that go pending →
+		//                 completed directly. Idempotent via META_AWARDED /
+		//                 META_SETTLED / claim row UNIQUE so re-firing on
+		//                 the second transition is a no-op.
+		// v1.13.0: was `completed`-only; moved earlier so My Claims → History
+		// reflects the redemption as soon as the customer actually pays.
+		add_action( 'woocommerce_order_status_processing', [ self::class, 'on_order_settled' ] );
+		add_action( 'woocommerce_order_status_completed',  [ self::class, 'on_order_settled' ] );
 
 		// Order didn't pay through. WC's "hold stock" feature auto-cancels
 		// pending orders after the configured timeout (Settings → Products →
@@ -60,7 +73,18 @@ final class WooCommerce {
 		SubsManager::render_optin_field();
 	}
 
-	public static function on_order_completed( int $order_id ): void {
+	/**
+	 * Hook target: `processing` AND `completed` order transitions. Each step
+	 * is idempotent on re-fire:
+	 *   - MembershipService::evaluate_tier_upgrade — pure read + conditional
+	 *     UPDATE; running twice is a no-op when the tier didn't change.
+	 *   - PointsEngine::award_for_order — guarded by `_zc_points_awarded`
+	 *     order meta (set on first run).
+	 *   - ClaimHandler::consume_for_order — VoucherClaim::mark_used flips
+	 *     `claimed → used`; second run finds nothing in `claimed` state and
+	 *     is a no-op.
+	 */
+	public static function on_order_settled( int $order_id ): void {
 		$order = wc_get_order( $order_id );
 		if ( ! $order ) {
 			return;

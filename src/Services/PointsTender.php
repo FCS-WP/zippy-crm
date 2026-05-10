@@ -65,6 +65,11 @@ final class PointsTender {
 	public static function register(): void {
 		add_action( 'woocommerce_cart_calculate_fees',     [ self::class, 'add_fee' ] );
 		add_action( 'woocommerce_checkout_create_order',   [ self::class, 'persist_to_order' ], 10, 2 );
+		// Settle on `processing` (most stores) AND `completed` (fallback for
+		// flows that skip processing). Idempotent via META_SETTLED.
+		// v1.13.0: was completed-only; now fires earlier so the ledger reflects
+		// the redemption when the customer actually pays through.
+		add_action( 'woocommerce_order_status_processing', [ self::class, 'settle_for_order' ], 30 );
 		add_action( 'woocommerce_order_status_completed',  [ self::class, 'settle_for_order' ], 30 );
 		add_action( 'woocommerce_order_refunded',          [ self::class, 'credit_back_on_refund' ], 10, 2 );
 
