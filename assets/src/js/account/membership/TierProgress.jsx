@@ -3,9 +3,14 @@ import { Progress } from "@/js/shared/ui/progress.jsx";
 import { money, number, percent } from "@/js/shared/utils/format.js";
 
 export function TierProgress({ membership }) {
-	const next = membership.next_tier;
+	const next       = membership.next_tier;
+	// Guard: the backend can return a "next" tier whose multiplier is ≤ the
+	// user's current one (happens when an admin tier sits between non-admin
+	// rungs). Treat that as "already at the top".
+	const nextMult   = next ? membership.tiers?.find((t) => t.slug === next.level)?.multiplier ?? 0 : 0;
+	const meaningful = next && next.target > 0 && nextMult > membership.multiplier;
 
-	if (!next) {
+	if (!meaningful) {
 		return (
 			<Card>
 				<CardHeader>

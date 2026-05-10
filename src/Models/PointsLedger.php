@@ -146,6 +146,16 @@ final class PointsLedger {
 		];
 	}
 
+	/**
+	 * Sum of `earn` rows since a given UTC datetime. Used by the My Account
+	 * Membership page to show "earned this month".
+	 */
+	public static function sum_earned_since( int $user_id, string $since_mysql ): int {
+		global $wpdb;
+		$sql = QueryLoader::query( 'points/sum_earned_since.sql' );
+		return (int) $wpdb->get_var( $wpdb->prepare( $sql, $user_id, $since_mysql ) );
+	}
+
 	/* ============================================================
 	 * Admin
 	 * ============================================================ */
