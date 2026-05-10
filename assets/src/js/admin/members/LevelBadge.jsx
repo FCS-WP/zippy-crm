@@ -1,15 +1,18 @@
 import { Badge } from "@/js/shared/ui/badge.jsx";
+import { useTiers } from "@/js/shared/hooks/useTiers.js";
+import { tierColor } from "@/js/shared/utils/tierColor.js";
 
-const MAP = {
-	free:   { variant: "muted",  label: "Free"   },
-	silver: { variant: "silver", label: "Silver" },
-	gold:   { variant: "gold",   label: "Gold"   },
-	vip:    { variant: "vip",    label: "VIP"    },
-};
-
+/**
+ * Tier badge — color comes from sort_order via tierColor(), label comes from
+ * the tier definition. Falls back gracefully when tiers haven't loaded yet
+ * or when a row references an unknown slug (e.g. a deleted tier left
+ * orphaned membership rows).
+ */
 export function LevelBadge({ level }) {
-	const info = MAP[level] ?? { variant: "muted", label: level };
-	return <Badge variant={info.variant}>{info.label}</Badge>;
+	const { findTier, labelFor } = useTiers();
+	const tier = findTier(level);
+	const color = tierColor(tier?.sort_order);
+	return <Badge variant={color.badge}>{labelFor(level)}</Badge>;
 }
 
 const STATUS_MAP = {

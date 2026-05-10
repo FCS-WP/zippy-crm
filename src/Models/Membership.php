@@ -17,22 +17,33 @@ final class Membership {
 
 	public const TABLE = 'crm_memberships';
 
-	public const LEVELS = [ 'free', 'silver', 'gold', 'vip' ];
 	public const STATUSES = [ 'active', 'suspended', 'expired' ];
 
-	public const MULTIPLIERS = [
-		'free'   => 1.0,
-		'silver' => 1.2,
-		'gold'   => 1.5,
-		'vip'    => 2.0,
-	];
+	/**
+	 * Tier slugs / multipliers / labels are configurable — they live in
+	 * crm_tiers and are read via TierRegistry. Use the helper methods below
+	 * (rather than removed LEVELS/MULTIPLIERS/LABELS constants) so admin
+	 * edits and added tiers take effect everywhere.
+	 *
+	 * @return array<int,string>
+	 */
+	public static function valid_slugs(): array {
+		return \ZippyCrm\Services\TierRegistry::slugs();
+	}
 
-	public const LABELS = [
-		'free'   => 'Free',
-		'silver' => 'Silver',
-		'gold'   => 'Gold',
-		'vip'    => 'VIP',
-	];
+	/** slug → label */
+	public static function labels(): array {
+		return \ZippyCrm\Services\TierRegistry::labels();
+	}
+
+	/** slug → float multiplier */
+	public static function multipliers(): array {
+		$out = [];
+		foreach ( \ZippyCrm\Services\TierRegistry::all() as $t ) {
+			$out[ (string) $t['slug'] ] = (float) $t['multiplier'];
+		}
+		return $out;
+	}
 
 	/** Sentinel value for the prepared "skip this filter" branch in admin SQL. */
 	private const FILTER_ALL = '__all__';
@@ -58,8 +69,8 @@ final class Membership {
 
 	public static function create( int $user_id, string $level = 'free' ): bool {
 		global $wpdb;
-		if ( ! in_array( $level, self::LEVELS, true ) ) {
-			$level = 'free';
+		if ( ! in_array( $level, self::valid_slugs(), true ) ) {
+			$level = \ZippyCrm\Services\TierRegistry::default_slug();
 		}
 		$inserted = $wpdb->insert(
 			self::table(),
@@ -75,7 +86,7 @@ final class Membership {
 	}
 
 	public static function update_level( int $user_id, string $level ): bool {
-		if ( ! in_array( $level, self::LEVELS, true ) ) {
+		if ( ! in_array( $level, self::valid_slugs(), true ) ) {
 			return false;
 		}
 		global $wpdb;
@@ -118,7 +129,7 @@ final class Membership {
 	 * crm_points_summary so the table renders in one query (no N+1 on the
 	 * row-count + balance per user).
 	 *
-	 * @param string $level   One of self::LEVELS, or '' to skip the filter.
+	 * @param string $level   A tier slug (see TierRegistry::slugs), or '' to skip the filter.
 	 * @param string $status  One of self::STATUSES, or '' to skip the filter.
 	 * @param string $search  Free-text against login/email/display_name. '' to skip.
 	 * @return array<int,array<string,mixed>>
@@ -126,7 +137,7 @@ final class Membership {
 	public static function list_for_admin( string $level, string $status, string $search, int $page, int $per_page ): array {
 		global $wpdb;
 
-		$level_active = $level !== '' && in_array( $level, self::LEVELS, true );
+		$level_active = $level !== '' && in_array( $level, self::valid_slugs(), true );
 		$level_token  = $level_active ? $level : self::FILTER_ALL;
 
 		$status_active = $status !== '' && in_array( $status, self::STATUSES, true );
@@ -160,7 +171,7 @@ final class Membership {
 	public static function count_for_admin( string $level, string $status, string $search ): int {
 		global $wpdb;
 
-		$level_active  = $level !== ''  && in_array( $level,  self::LEVELS,   true );
+		$level_active  = $level !== ''  && in_array( $level,  self::valid_slugs(),   true );
 		$level_token   = $level_active  ? $level  : self::FILTER_ALL;
 
 		$status_active = $status !== '' && in_array( $status, self::STATUSES, true );
@@ -193,7 +204,7 @@ final class Membership {
 		$sql  = QueryLoader::query( 'admin/members/count_by_level.sql' );
 		$rows = $wpdb->get_results( $sql, ARRAY_A );
 
-		$out = array_fill_keys( self::LEVELS, 0 );
+		$out = array_fill_keys( self::valid_slugs(), 0 );
 		foreach ( (array) $rows as $row ) {
 			$level = (string) ( $row['level'] ?? '' );
 			if ( isset( $out[ $level ] ) ) {

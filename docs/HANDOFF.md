@@ -137,7 +137,14 @@ A few non-obvious decisions worth knowing:
 - Read via `GET /admin/audit?event=&actor_id=&target_id=&page=&per_page=`. Empty/0 filters are skipped.
 - The audit table is append-only — no `record_*_undid()` calls. Corrections are a *new* row.
 
-### 8. **HPOS-only — no `get_post_meta` for orders**
+### 8. **Tier definitions are data, not constants**
+- The four tiers (free/silver/gold/vip) **used to be** hardcoded as constants on `Membership`. They're now rows in `crm_tiers`, served by [`TierRegistry`](../src/Services/TierRegistry.php).
+- **Never** read `Membership::LEVELS`, `MULTIPLIERS`, or `LABELS` — those constants are gone. Use `TierRegistry::slugs()`, `TierRegistry::multiplier_for($slug)`, `TierRegistry::labels()` instead. Or call `Membership::valid_slugs()` / `Membership::labels()` / `Membership::multipliers()` if you specifically want the model's facade.
+- Adding a new tier: `TierRegistry::create([slug, label, multiplier, threshold_orders, threshold_spend, is_admin_only, sort_order])`. Slugs are immutable once created.
+- `is_admin_only=1` tiers (e.g. vip) are skipped by `evaluate_tier_upgrade` — same sticky-VIP semantics as the original spec, just generalized.
+- `next_tier_progress` walks `sort_order` ascending, `compute_for_stats` walks `threshold_spend` descending.
+
+### 9. **HPOS-only — no `get_post_meta` for orders**
 - All order code uses `wc_get_order($id)`, `$order->get_meta()`, `$order->update_meta_data()`, `wc_get_orders([...])`
 - See [woocommerce-hpos.md](../.claude/rules/woocommerce-hpos.md) for the full list
 

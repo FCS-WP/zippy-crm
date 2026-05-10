@@ -44,6 +44,10 @@ final class AuditLogger {
 	public const EVENT_VOUCHER_DELETED   = 'voucher.deleted';
 	public const EVENT_VOUCHER_DUPLICATED = 'voucher.duplicated';
 
+	public const EVENT_TIER_CREATED = 'tier.created';
+	public const EVENT_TIER_UPDATED = 'tier.updated';
+	public const EVENT_TIER_DELETED = 'tier.deleted';
+
 	/**
 	 * Hook target: Plugin::boot.
 	 * Subscribes to existing crm_* actions so admin writes get logged
@@ -57,6 +61,11 @@ final class AuditLogger {
 		// Voucher publish action exists already. The other voucher actions
 		// (created/updated/paused/...) are explicit-call territory — see record_*.
 		add_action( 'crm_voucher_published', [ self::class, 'on_voucher_published' ] );
+
+		// Tier CRUD fires its own actions from TierRegistry — listen and log.
+		add_action( 'crm_tier_created', [ self::class, 'on_tier_created' ] );
+		add_action( 'crm_tier_updated', [ self::class, 'on_tier_updated' ], 10, 2 );
+		add_action( 'crm_tier_deleted', [ self::class, 'on_tier_deleted' ] );
 	}
 
 	/* ============================================================
@@ -94,6 +103,27 @@ final class AuditLogger {
 			null, // voucher events have no target user
 			[ 'voucher_id' => $voucher_id ]
 		);
+	}
+
+	public static function on_tier_created( string $slug ): void {
+		if ( ! self::is_admin_context() ) {
+			return;
+		}
+		self::record( self::EVENT_TIER_CREATED, null, [ 'slug' => $slug ] );
+	}
+
+	public static function on_tier_updated( string $slug, array $fields = [] ): void {
+		if ( ! self::is_admin_context() ) {
+			return;
+		}
+		self::record( self::EVENT_TIER_UPDATED, null, [ 'slug' => $slug, 'fields' => $fields ] );
+	}
+
+	public static function on_tier_deleted( string $slug ): void {
+		if ( ! self::is_admin_context() ) {
+			return;
+		}
+		self::record( self::EVENT_TIER_DELETED, null, [ 'slug' => $slug ] );
 	}
 
 	/* ============================================================

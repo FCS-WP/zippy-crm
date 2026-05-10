@@ -247,6 +247,17 @@
 - [x] Mock layer: admin points routes added to `LIVE_ROUTES`
 - [x] Smoke-tested via `wp eval-file` (8 cases — system_summary equals direct SUM; ledger pagination + type filter + bad-filter 400; pending_redeem excluded; recalculate-all on clean dataset reports zero drift; recalculate-all on synthetic-drift dataset corrects the corrupted balance)
 
+### Tiers
+- [x] `TiersPanel` — table of tiers (slug, label, multiplier, thresholds, admin-only flag, member count, sort_order) + create/edit drawer + delete
+- [x] `TierForm` — slug locked once created; multiplier / thresholds / admin-only switch / sort_order; serves both create and edit
+- [x] Auto-color palette (`shared/utils/tierColor.js`) — sort_order → palette slot (zinc/silver/gold/fuchsia/emerald/sky/amber/rose) so new tiers get a sensible default colour with no extra config
+- [x] Shared `useTiers()` hook (`shared/hooks/useTiers.js`) — single cached query feeding `TiersPanel` + Members `FilterBar` / `StatsBar` / `LevelChangeForm` / `LevelBadge` (third use → promoted to `shared/`)
+- [x] Members admin UI is now fully tier-data-driven — adding "platinum" via the Tiers panel grows StatsBar to 5 cards, adds the option to FilterBar, and shows up in LevelChangeForm with auto-generated note ("2.5× — auto-assigned at 30+ orders or $5000+ spend"). No frontend redeploy needed.
+- [x] Top-level submenu — Zippy CRM → Members / Tiers / Vouchers / Points / Reports
+- [x] **Backend regression fix**: `MembershipController::admin_list` no longer filters slugs against a hardcoded `['free','silver','gold','vip']` constant — uses `TierRegistry::exists()` so newly-created tiers are accepted by the Members filter immediately.
+- [x] Mock layer: `GET /tiers`, `GET|POST /admin/tiers`, `PUT|DELETE /admin/tiers/{slug}` added to `LIVE_ROUTES` / `LIVE_PREFIXES`
+- [x] Smoke-tested via `wp eval-file` (12 cases — public list filtered, public list incl. admin-only, admin list w/ member counts, create with full payload, bad slug 400, duplicate slug 409, update, delete-with-members 409, junk-slug filter rejection 400; lowercase round-trip verified separately)
+
 ### Reports
 - [x] `ReportsPanel` — new members (area), points activity (stacked bars: earned/redeemed/adjusted), voucher claims (line: claimed vs used)
 - [x] Date-range picker — 7/30/90-day presets + custom range with date inputs and Apply button
@@ -258,6 +269,17 @@
 ---
 
 ## 6. Cross-cutting
+
+### Tier configuration (data-driven tier ladder)
+- [x] `Schema/crm_tiers.sql` — slug PK, label, multiplier, threshold_orders, threshold_spend, is_admin_only, sort_order (DB v1.7.0)
+- [x] Installer seeds the four canonical tiers (free/silver/gold/vip) on first install — legacy `crm_memberships.membership_level` rows keep working
+- [x] `Models/Tier` — `all`, `find`, `insert`, `update` (slug immutable), `delete`, `member_counts`
+- [x] `Services/TierRegistry` — single source of truth: `slugs()`, `labels()`, `multiplier_for()`, `compute_for_stats()`, `next_above()`, plus admin CRUD with validation + deletion guards (refuse if members on tier; refuse if last non-admin tier)
+- [x] `MembershipService` refactored: removed `TIER_THRESHOLDS` constant, removed hardcoded `'free'/'silver'/'gold'/'vip'` ladder, uses `TierRegistry` everywhere
+- [x] `Membership` model: removed `LEVELS / MULTIPLIERS / LABELS` constants, replaced with static methods that delegate to `TierRegistry`
+- [x] REST: `GET /tiers` (public, filtered to non-admin tiers), `GET|POST /admin/tiers`, `PUT|DELETE /admin/tiers/{slug}`
+- [x] `AuditLogger` listens to `crm_tier_created/updated/deleted` and records when admin-context
+- [x] Verified end-to-end: REST CRUD round-trip works, admin events captured in audit log, existing customer endpoints unchanged
 
 ### Audit log (admin write actions)
 - [x] `Schema/crm_audit_log.sql` — `idx_target_created`, `idx_actor_created`, `idx_event_created` (DB v1.6.0)

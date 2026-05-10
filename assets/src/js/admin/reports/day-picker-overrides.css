@@ -1,34 +1,148 @@
 /*
- * Tighten react-day-picker to match the admin look. Scoped via .rdp-root
- * (the library wraps everything in this class) so we don't leak into other
- * calendars on the page.
- *
- * Variables come from react-day-picker's own theme tokens — overriding them
- * is safer than re-styling every selector.
+ * Compact, tight react-day-picker styling that matches the admin look.
+ * Scoped via .rdp-root so we don't bleed into other calendars.
  */
 .rdp-root {
-	--rdp-accent-color:           #18181b;   /* zinc-900 — match primary buttons */
+	--rdp-accent-color:           #18181b;   /* zinc-900 — primary buttons */
 	--rdp-accent-background-color:#f4f4f5;   /* zinc-100 */
-	--rdp-day_button-border-radius: 6px;
-	--rdp-day-width:  36px;
-	--rdp-day-height: 36px;
+	--rdp-day_button-border-radius: 4px;
+	/* Cells are fluid (1/7 each) so the grid fills its container at any width.
+	   Fixed cell width caused empty space on the right when the popover was
+	   wider than 7 × 30px. */
+	--rdp-day-width:  100%;
+	--rdp-day-height: 32px;
 	--rdp-font-family: inherit;
-	font-size: 13px;
-	color: #27272a; /* zinc-800 */
+	width: 100%;
+	font-size: 12px;
+	color: #27272a;
 }
 
+/* Tighter overall padding inside the popover. */
+.rdp-root .rdp-months {
+	margin: 0;
+	display: flex;
+	gap: 16px;
+	justify-content: center;
+}
+.rdp-root .rdp-month {
+	padding: 0;
+	flex: 1;
+}
+
+/* Header (caption + nav) */
 .rdp-root .rdp-month_caption,
 .rdp-root .rdp-caption_label {
 	font-weight: 600;
+	font-size: 13px;
 	color: #18181b;
 }
+.rdp-root .rdp-nav {
+	gap: 4px;
+}
+.rdp-root .rdp-nav_button {
+	width: 28px;
+	height: 28px;
+	border-radius: 4px;
+}
+.rdp-root .rdp-nav_button:hover {
+	background-color: #f4f4f5;
+}
 
+/* Weekday header row */
+.rdp-root .rdp-weekdays {
+	border-bottom: 1px solid #f4f4f5;
+}
 .rdp-root .rdp-weekday {
-	color: #71717a; /* zinc-500 */
+	color: #a1a1aa;
 	font-weight: 500;
-	font-size: 11px;
+	font-size: 10px;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
+	width: calc(100% / 7);
+	height: 24px;
+	padding: 0;
+	text-align: center;
+}
+
+/* Day grid cells — table fills the popover; each cell is 1/7 of the row. */
+.rdp-root .rdp-month_grid {
+	width: 100%;
+	table-layout: fixed;
+	border-collapse: collapse;
+	border-spacing: 0;
+}
+.rdp-root .rdp-day {
+	width: calc(100% / 7);
+	height: 32px;
+	padding: 1px;
+	text-align: center;
+}
+
+/* Day buttons — thin rectangles so the range fill reads as one continuous bar */
+.rdp-root .rdp-day_button {
+	width: 100%;
+	height: 100%;
+	border: 0;
+	border-radius: 4px;
+	font-size: 12px;
+	background: transparent;
+	color: inherit;
+	transition: background-color 100ms ease, color 100ms ease;
+}
+.rdp-root .rdp-day_button:hover:not([disabled]):not(.rdp-selected .rdp-day_button) {
+	background-color: #f4f4f5;
+}
+.rdp-root .rdp-day_button:focus-visible {
+	outline: 2px solid #a1a1aa;
+	outline-offset: 1px;
+}
+
+/* Selected single day OR range endpoints — solid dark fill */
+.rdp-root .rdp-selected .rdp-day_button {
+	background-color: var(--rdp-accent-color);
+	color: white;
+	font-weight: 600;
+}
+
+/* Range middle days — soft fill, square corners so the bar feels continuous */
+.rdp-root .rdp-range_middle .rdp-day_button {
+	background-color: #f4f4f5;
+	color: #18181b;
+	border-radius: 0;
+	font-weight: 500;
+}
+
+/* Range endpoints: keep dark fill, round only the outer corners */
+.rdp-root .rdp-range_start .rdp-day_button {
+	border-top-right-radius:    0;
+	border-bottom-right-radius: 0;
+}
+.rdp-root .rdp-range_end .rdp-day_button {
+	border-top-left-radius:    0;
+	border-bottom-left-radius: 0;
+}
+/* When start === end (just one day picked so far), keep all corners rounded */
+.rdp-root .rdp-range_start.rdp-range_end .rdp-day_button {
+	border-radius: 4px;
+}
+
+/* Today indicator (when not selected) */
+.rdp-root .rdp-today:not(.rdp-selected):not(.rdp-range_middle) .rdp-day_button {
+	font-weight: 600;
+	color: var(--rdp-accent-color);
+	box-shadow: inset 0 0 0 1px #e4e4e7;
+}
+
+/* Outside / disabled days — never paint them, even when they fall in a range */
+.rdp-root .rdp-outside,
+.rdp-root .rdp-outside .rdp-day_button {
+	background: transparent !important;
+	color: #d4d4d8;
+	pointer-events: none;
+}
+.rdp-root .rdp-disabled .rdp-day_button {
+	color: #d4d4d8;
+	cursor: not-allowed;
 }
 
 /* WP admin's forms.css adds a global `select { background-image: url(…) }`
@@ -38,43 +152,14 @@
 	-webkit-appearance: none;
 	-moz-appearance:    none;
 	appearance:         none;
-	padding-right: 1.5rem;
+	padding: 2px 18px 2px 6px;
 	background-color: transparent;
 	border: 1px solid #e4e4e7;
-	border-radius: 6px;
-}
-
-.rdp-root .rdp-day_button {
-	transition: background-color 120ms ease, color 120ms ease;
-}
-.rdp-root .rdp-day_button:hover:not([disabled]) {
-	background-color: #f4f4f5;
-}
-
-.rdp-root .rdp-day_button:focus-visible {
-	outline: 2px solid #a1a1aa;
-	outline-offset: 1px;
-}
-
-/* Range middle days — softer fill so endpoints stand out. */
-.rdp-root .rdp-range_middle .rdp-day_button {
-	background-color: #f4f4f5;
+	border-radius: 4px;
+	font-size: 12px;
+	font-weight: 500;
 	color: #18181b;
-	border-radius: 0;
 }
-
-.rdp-root .rdp-range_start .rdp-day_button,
-.rdp-root .rdp-range_end .rdp-day_button {
-	background-color: var(--rdp-accent-color);
-	color: white;
-}
-
-.rdp-root .rdp-today:not(.rdp-selected) .rdp-day_button {
-	font-weight: 600;
-	color: var(--rdp-accent-color);
-}
-
-.rdp-root .rdp-disabled,
-.rdp-root .rdp-outside {
-	color: #d4d4d8; /* zinc-300 */
+.rdp-root select:hover {
+	background-color: #f4f4f5;
 }

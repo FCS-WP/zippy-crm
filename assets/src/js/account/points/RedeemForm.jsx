@@ -44,20 +44,36 @@ export function RedeemForm({ summary }) {
 
 	const previewDiscount = points / rate;
 
+	// When a redeem just succeeded, the panel becomes a focused success view:
+	// the freshly-issued coupon is the only thing on screen until the user
+	// dismisses it. This avoids two confusing co-renders:
+	//   1. The empty-hint copy ("all your points are tied up...") shown
+	//      alongside a coupon code that contradicts it.
+	//   2. The form re-rendering with a stale `available` value before
+	//      /points/me refetch lands.
+	const showSuccess = result?.kind === "ok";
+
 	return (
 		<Card>
 			<CardHeader>
 				<CardTitle>Redeem points</CardTitle>
-				<CardDescription>
-					{canRedeem
-						? <>Up to <span className="zc-font-medium zc-text-zinc-700">{money(max / rate)}</span> in discount available now.</>
-						: reserved > 0
-							? <>All your points are tied up in pending coupons. Use them or wait for them to expire.</>
-							: <>Earn at least {min} points to redeem.</>}
-				</CardDescription>
+				{!showSuccess && (
+					<CardDescription>
+						{canRedeem
+							? <>Up to <span className="zc-font-medium zc-text-zinc-700">{money(max / rate)}</span> in discount available now.</>
+							: reserved > 0
+								? <>All your points are tied up in pending coupons. Use them or wait for them to expire.</>
+								: <>Earn at least {min} points to redeem.</>}
+					</CardDescription>
+				)}
 			</CardHeader>
 			<CardContent className="zc-space-y-4">
-				{!canRedeem ? (
+				{showSuccess ? (
+					<RedeemSuccess
+						data={result.data}
+						onDismiss={() => setResult(null)}
+					/>
+				) : !canRedeem ? (
 					<EmptyRedeemHint available={available} reserved={reserved} min={min} />
 				) : (
 					<form onSubmit={submit} className="zc-space-y-5">
@@ -99,7 +115,6 @@ export function RedeemForm({ summary }) {
 					</form>
 				)}
 
-				{result?.kind === "ok" && <RedeemSuccess data={result.data} />}
 				{result?.kind === "err" && (
 					<p className="zc-rounded-md zc-bg-rose-50 zc-px-3 zc-py-2 zc-text-sm zc-text-rose-700">
 						{result.message}
@@ -167,18 +182,26 @@ function DiscountPreview({ points, discount }) {
 function EmptyRedeemHint({ available, reserved, min }) {
 	const need = min - available;
 	return (
-		<div className="zc-rounded-lg zc-bg-zinc-50 zc-p-4 zc-text-sm zc-text-zinc-600">
-			You have <span className="zc-font-semibold zc-text-zinc-900">{number(available)} pts</span> available
-			{reserved > 0 && <> (<span className="zc-font-semibold zc-text-zinc-900">{number(reserved)}</span> reserved in pending coupons)</>}
-			.
-			{need > 0 && available < min && reserved === 0 && (
-				<> Earn <span className="zc-font-semibold zc-text-zinc-900">{number(need)}</span> more to redeem your first reward.</>
+		<div className="zc-space-y-2 zc-rounded-lg zc-bg-zinc-50 zc-p-4 zc-text-sm zc-text-zinc-600">
+			<p>
+				You have <span className="zc-font-semibold zc-text-zinc-900">{number(available)} pts</span> available.
+				{reserved > 0 && (
+					<> {number(reserved)} pts are locked in active coupons.</>
+				)}
+				{need > 0 && available < min && reserved === 0 && (
+					<> Earn <span className="zc-font-semibold zc-text-zinc-900">{number(need)}</span> more to redeem your first reward.</>
+				)}
+			</p>
+			{reserved > 0 && (
+				<p className="zc-text-xs zc-text-zinc-500">
+					Pending coupons expire 24h after they're issued. Once they expire, those points return here automatically.
+				</p>
 			)}
 		</div>
 	);
 }
 
-function RedeemSuccess({ data }) {
+function RedeemSuccess({ data, onDismiss }) {
 	const [copied, setCopied] = useState(false);
 	const copy = async () => {
 		try {
@@ -188,17 +211,26 @@ function RedeemSuccess({ data }) {
 		} catch { /* clipboard blocked */ }
 	};
 	return (
-		<div className="zc-rounded-lg zc-border zc-border-emerald-200 zc-bg-emerald-50 zc-p-4">
-			<p className="zc-text-xs zc-font-medium zc-uppercase zc-tracking-wider zc-text-emerald-800">Coupon ready</p>
-			<div className="zc-mt-2 zc-flex zc-items-center zc-justify-between zc-gap-3">
-				<code className="zc-rounded zc-border zc-border-emerald-300 zc-bg-white zc-px-2.5 zc-py-1 zc-font-mono zc-text-sm zc-font-semibold zc-text-emerald-900">
-					{data.coupon_code}
-				</code>
-				<Button size="sm" variant="outline" onClick={copy}>{copied ? "Copied" : "Copy"}</Button>
+		<div className="zc-space-y-3">
+			<div className="zc-rounded-lg zc-border zc-border-emerald-200 zc-bg-emerald-50 zc-p-4">
+				<p className="zc-text-xs zc-font-medium zc-uppercase zc-tracking-wider zc-text-emerald-800">
+					Coupon ready
+				</p>
+				<div className="zc-mt-2 zc-flex zc-items-center zc-justify-between zc-gap-3">
+					<code className="zc-truncate zc-rounded zc-border zc-border-emerald-300 zc-bg-white zc-px-2.5 zc-py-1 zc-font-mono zc-text-sm zc-font-semibold zc-text-emerald-900">
+						{data.coupon_code}
+					</code>
+					<Button size="sm" variant="outline" onClick={copy}>
+						{copied ? "Copied" : "Copy"}
+					</Button>
+				</div>
+				<p className="zc-mt-2 zc-text-sm zc-text-emerald-800">
+					{money(data.discount)} off — apply at checkout. Expires in 24h.
+				</p>
 			</div>
-			<p className="zc-mt-2 zc-text-sm zc-text-emerald-800">
-				{money(data.discount)} off — apply at checkout. Expires in 24h.
-			</p>
+			<Button variant="outline" className="zc-w-full" onClick={onDismiss}>
+				Done
+			</Button>
 		</div>
 	);
 }

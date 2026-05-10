@@ -3,6 +3,7 @@ namespace ZippyCrm\Controllers\Rest;
 
 use ZippyCrm\Models\Membership;
 use ZippyCrm\Services\MembershipService;
+use ZippyCrm\Services\TierRegistry;
 use ZippyCrm\Support\DateTimeHelper;
 use ZippyCrm\Support\RestResponse;
 
@@ -13,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class MembershipController {
 
-	private const ALLOWED_LEVEL_FILTERS  = [ 'free', 'silver', 'gold', 'vip' ];
+	/** Status enum lives on the model — tier slugs come from TierRegistry. */
 	private const ALLOWED_STATUS_FILTERS = [ 'active', 'suspended', 'expired' ];
 	private const DEFAULT_PER_PAGE       = 20;
 	private const MAX_PER_PAGE           = 100;
@@ -41,8 +42,8 @@ final class MembershipController {
 				'email'        => $user ? $user->user_email : '',
 			],
 			'level'       => $level,
-			'level_label' => Membership::LABELS[ $level ] ?? ucfirst( $level ),
-			'multiplier'  => Membership::MULTIPLIERS[ $level ] ?? 1.0,
+			'level_label' => TierRegistry::labels()[ $level ] ?? ucfirst( $level ),
+			'multiplier'  => TierRegistry::multiplier_for( $level ),
 			'status'      => $row['status'] ?? 'active',
 			'joined_at'   => DateTimeHelper::mysql_to_iso( $row['joined_at']  ?? null ),
 			'expires_at'  => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
@@ -65,7 +66,7 @@ final class MembershipController {
 		$per_page = (int) $request->get_param( 'per_page' ) ?: self::DEFAULT_PER_PAGE;
 		$per_page = max( 1, min( self::MAX_PER_PAGE, $per_page ) );
 
-		if ( $level !== '' && ! in_array( $level, self::ALLOWED_LEVEL_FILTERS, true ) ) {
+		if ( $level !== '' && ! TierRegistry::exists( $level ) ) {
 			return RestResponse::error( 'bad_level_filter', __( 'Unknown level filter.', 'zippy-crm' ), 400 );
 		}
 		if ( $status !== '' && ! in_array( $status, self::ALLOWED_STATUS_FILTERS, true ) ) {
@@ -104,8 +105,8 @@ final class MembershipController {
 				'registered'   => $user->user_registered,
 			],
 			'level'       => $level,
-			'level_label' => Membership::LABELS[ $level ] ?? ucfirst( $level ),
-			'multiplier'  => Membership::MULTIPLIERS[ $level ] ?? 1.0,
+			'level_label' => TierRegistry::labels()[ $level ] ?? ucfirst( $level ),
+			'multiplier'  => TierRegistry::multiplier_for( $level ),
 			'status'      => $row['status'] ?? 'active',
 			'joined_at'   => DateTimeHelper::mysql_to_iso( $row['joined_at']  ?? null ),
 			'expires_at'  => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
@@ -150,7 +151,7 @@ final class MembershipController {
 			'display_name'   => (string) $row['display_name'],
 			'registered_at'  => DateTimeHelper::mysql_to_iso( $row['user_registered'] ?? null ),
 			'level'          => $level,
-			'level_label'    => Membership::LABELS[ $level ] ?? ucfirst( $level ),
+			'level_label'    => TierRegistry::labels()[ $level ] ?? ucfirst( $level ),
 			'status'         => (string) $row['membership_status'],
 			'joined_at'      => DateTimeHelper::mysql_to_iso( $row['joined_at']  ?? null ),
 			'expires_at'     => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),

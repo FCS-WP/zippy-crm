@@ -76,7 +76,7 @@ function CalendarTrigger({ value, active, onApply }) {
 	useLayoutEffect(() => {
 		if (!open || !triggerRef.current) return;
 		const r = triggerRef.current.getBoundingClientRect();
-		const popoverW = 580;
+		const popoverW = 560;
 		const left = Math.max(8, Math.min(window.innerWidth - popoverW - 8, r.right - popoverW));
 		const top  = r.bottom + 4;
 		setPos({ top, left });
@@ -138,29 +138,33 @@ function CalendarTrigger({ value, active, onApply }) {
 				? createPortal(
 					<div
 						ref={popoverRef}
-						style={{ position: "fixed", top: pos.top, left: pos.left, width: 580 }}
+						style={{ position: "fixed", top: pos.top, left: pos.left, width: 560 }}
 						className="zc-z-[100001] zc-overflow-hidden zc-rounded-lg zc-border zc-border-zinc-200 zc-bg-white zc-shadow-xl"
 					>
-						<div className="zc-p-3">
+						<div className="zc-px-3 zc-py-2">
 							<DayPicker
 								mode="range"
 								numberOfMonths={2}
 								selected={draft}
 								onSelect={setDraft}
 								captionLayout="dropdown"
+								showOutsideDays={false}
+								defaultMonth={defaultMonthFor(draft)}
 							/>
 						</div>
-						<div className="zc-flex zc-items-center zc-justify-between zc-gap-2 zc-border-t zc-border-zinc-200 zc-bg-zinc-50 zc-px-3 zc-py-2">
-							<span className="zc-text-xs zc-text-zinc-500">
+						<div className="zc-flex zc-items-center zc-justify-between zc-gap-2 zc-border-t zc-border-zinc-200 zc-bg-zinc-50 zc-px-3 zc-py-1.5">
+							<span className="zc-text-[11px] zc-text-zinc-500">
 								{draft?.from && draft?.to
 									? `${formatShort(formatYmd(draft.from))} → ${formatShort(formatYmd(draft.to))}`
-									: "Pick a start and end date"}
+									: draft?.from
+										? `${formatShort(formatYmd(draft.from))} → …`
+										: "Pick start and end"}
 							</span>
-							<div className="zc-flex zc-gap-2">
+							<div className="zc-flex zc-gap-1">
 								<button
 									type="button"
 									onClick={() => setOpen(false)}
-									className="zc-h-8 zc-rounded-md zc-px-3 zc-text-xs zc-font-medium zc-text-zinc-600 hover:zc-bg-zinc-100"
+									className="zc-h-7 zc-rounded-md zc-px-2.5 zc-text-xs zc-font-medium zc-text-zinc-600 hover:zc-bg-zinc-100"
 								>
 									Cancel
 								</button>
@@ -168,7 +172,7 @@ function CalendarTrigger({ value, active, onApply }) {
 									type="button"
 									onClick={apply}
 									disabled={!draft?.from || !draft?.to}
-									className="zc-h-8 zc-rounded-md zc-bg-zinc-900 zc-px-3 zc-text-xs zc-font-medium zc-text-white hover:zc-bg-zinc-800 disabled:zc-cursor-not-allowed disabled:zc-bg-zinc-300"
+									className="zc-h-7 zc-rounded-md zc-bg-zinc-900 zc-px-2.5 zc-text-xs zc-font-medium zc-text-white hover:zc-bg-zinc-800 disabled:zc-cursor-not-allowed disabled:zc-bg-zinc-300"
 								>
 									Apply
 								</button>
@@ -185,6 +189,37 @@ function CalendarTrigger({ value, active, onApply }) {
 /* ============================================================
  * Helpers
  * ============================================================ */
+
+/**
+ * For a two-month layout, pick the starting (left-side) month so both range
+ * endpoints are visible without scrolling.
+ *
+ * Cases:
+ *   - No selection yet → start at last month, current month on the right
+ *     (today is what users want to see most often).
+ *   - Range fits in one month → that month on left, next on right.
+ *   - Range spans 2 months → from-month on left, to-month on right.
+ *   - Range spans 3+ months → from-month on left, but user will need to
+ *     scroll right to see "to". Acceptable edge case; we surface it via the
+ *     footer label.
+ */
+function defaultMonthFor(draft) {
+	const today = new Date();
+	if (!draft?.from) {
+		return new Date(today.getFullYear(), today.getMonth() - 1, 1);
+	}
+	if (!draft?.to) {
+		return new Date(draft.from.getFullYear(), draft.from.getMonth(), 1);
+	}
+	const fromMonth = draft.from.getMonth() + draft.from.getFullYear() * 12;
+	const toMonth   = draft.to.getMonth()   + draft.to.getFullYear()   * 12;
+	if (toMonth - fromMonth >= 1) {
+		// Spans at least 2 months — anchor on the from month so to is on the right.
+		return new Date(draft.from.getFullYear(), draft.from.getMonth(), 1);
+	}
+	// Same month — show that month + the next one.
+	return new Date(draft.from.getFullYear(), draft.from.getMonth(), 1);
+}
 
 /** YYYY-MM-DD → `{ from: Date, to: Date }` for react-day-picker. */
 function toRange(value) {

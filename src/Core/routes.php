@@ -22,6 +22,7 @@ use ZippyCrm\Controllers\Rest\MembershipController;
 use ZippyCrm\Controllers\Rest\NotificationsController;
 use ZippyCrm\Controllers\Rest\PointsController;
 use ZippyCrm\Controllers\Rest\ReportsController;
+use ZippyCrm\Controllers\Rest\TiersController;
 use ZippyCrm\Controllers\Rest\VouchersController;
 
 return [
@@ -259,6 +260,45 @@ return [
 			'delta'   => [ 'type' => 'integer', 'required' => true ],
 			'reason'  => [ 'type' => 'string',  'required' => true ],
 		],
+	],
+
+	// -------- Tiers (public read) --------
+	[
+		'method'  => 'GET',
+		'path'    => '/tiers',
+		'handler' => [ TiersController::class, 'list_public' ],
+		'auth'    => 'user',
+		'args'    => [
+			'include_admin_only' => [ 'type' => 'boolean', 'default' => false ],
+		],
+	],
+
+	// -------- Tiers (admin CRUD) --------
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/tiers',
+		'handler' => [ TiersController::class, 'admin_list' ],
+		'auth'    => 'manage_woocommerce',
+	],
+	[
+		'method'  => 'POST',
+		'path'    => '/admin/tiers',
+		'handler' => [ TiersController::class, 'admin_create' ],
+		'auth'    => 'manage_woocommerce',
+	],
+	[
+		'method'  => 'PUT',
+		'path'    => '/admin/tiers/(?P<slug>[a-z0-9_-]+)',
+		'handler' => [ TiersController::class, 'admin_update' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [ 'slug' => [ 'type' => 'string', 'required' => true ] ],
+	],
+	[
+		'method'  => 'DELETE',
+		'path'    => '/admin/tiers/(?P<slug>[a-z0-9_-]+)',
+		'handler' => [ TiersController::class, 'admin_delete' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [ 'slug' => [ 'type' => 'string', 'required' => true ] ],
 	],
 
 	// -------- Audit log (admin) --------

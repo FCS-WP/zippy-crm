@@ -1,12 +1,5 @@
 import { Input } from "@/js/shared/ui/input.jsx";
-
-const LEVELS = [
-	{ key: "",       label: "All levels" },
-	{ key: "free",   label: "Free"       },
-	{ key: "silver", label: "Silver"     },
-	{ key: "gold",   label: "Gold"       },
-	{ key: "vip",    label: "VIP"        },
-];
+import { useTiers } from "@/js/shared/hooks/useTiers.js";
 
 const STATUSES = [
 	{ key: "",          label: "All statuses" },
@@ -20,7 +13,15 @@ const STATUSES = [
  * than pill rows when more filters are added (e.g. date range, role).
  */
 export function FilterBar({ level, onLevel, status, onStatus, search, onSearch }) {
+	const { tiers } = useTiers();
 	const hasFilters = Boolean(level || status || search);
+
+	// "All levels" + one option per tier (admin-only included so admins can
+	// filter to e.g. VIP).
+	const levelOptions = [
+		{ key: "", label: "All levels" },
+		...tiers.map((t) => ({ key: t.slug, label: t.label })),
+	];
 
 	const reset = () => { onLevel(""); onStatus(""); onSearch(""); };
 
@@ -36,8 +37,8 @@ export function FilterBar({ level, onLevel, status, onStatus, search, onSearch }
 				/>
 			</div>
 
-			<Select value={level}  onChange={onLevel}  options={LEVELS}   ariaLabel="Filter by level" />
-			<Select value={status} onChange={onStatus} options={STATUSES} ariaLabel="Filter by status" />
+			<Select value={level}  onChange={onLevel}  options={levelOptions} ariaLabel="Filter by level" />
+			<Select value={status} onChange={onStatus} options={STATUSES}     ariaLabel="Filter by status" />
 
 			{hasFilters ? (
 				<button

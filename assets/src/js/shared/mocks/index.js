@@ -28,6 +28,9 @@ const LIVE_ROUTES = new Set([
 	"GET /admin/reports/members-per-day",
 	"GET /admin/reports/points-activity",
 	"GET /admin/reports/voucher-claims",
+	"GET /tiers",
+	"GET /admin/tiers",
+	"POST /admin/tiers",
 ]);
 
 // Path prefixes that should hit the real backend (for routes with `{id}` etc).
@@ -41,6 +44,9 @@ const LIVE_PREFIXES = [
 	// Admin members (per-id GET + POST level/status/points)
 	"GET /admin/members/",
 	"POST /admin/members/",
+	// Admin tiers (per-slug PUT / DELETE)
+	"PUT /admin/tiers/",
+	"DELETE /admin/tiers/",
 ];
 
 export function shouldMock(method, path) {

@@ -3,7 +3,6 @@ namespace ZippyCrm\Services;
 
 use ZippyCrm\Models\Membership;
 use ZippyCrm\Support\Cache;
-use ZippyCrm\Support\DateTimeHelper;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -12,21 +11,17 @@ defined( 'ABSPATH' ) || exit;
  * this layer owns: seeding on registration, tier upgrades on order completion,
  * multiplier lookup with cache.
  *
- * Tier rules (FEATURE_SPEC §1.2):
- *   silver — 5+ completed orders OR $500+ lifetime spend
- *   gold   — 15+ completed orders OR $2,000+ lifetime spend
- *   vip    — admin-assigned only (never auto-upgraded)
+ * Tier definitions (slugs, labels, multipliers, thresholds, admin-only flag)
+ * live in `crm_tiers` and are read via `TierRegistry`. Default seeds match the
+ * original spec §1.2 (free / silver / gold / vip).
  *
- * vip is sticky — once an admin sets it, automated evaluation never downgrades.
+ * Admin-only tiers (e.g. vip) are never auto-assigned by `evaluate_tier_upgrade`
+ * — they're sticky in the same way the original VIP was: once an admin sets it,
+ * automated evaluation refuses to overwrite.
  */
 final class MembershipService {
 
 	private const CACHE_KEY = 'membership:%d';
-
-	public const TIER_THRESHOLDS = [
-		'silver' => [ 'orders' => 5,  'spend' => 500.0 ],
-		'gold'   => [ 'orders' => 15, 'spend' => 2000.0 ],
-	];
 
 	/**
 	 * Read-through cached fetch. Returns the membership row, seeding one
@@ -48,9 +43,9 @@ final class MembershipService {
 	}
 
 	public static function get_multiplier( int $user_id ): float {
-		$row = self::get_for_user( $user_id );
-		$level = $row['membership_level'] ?? 'free';
-		return Membership::MULTIPLIERS[ $level ] ?? 1.0;
+		$row   = self::get_for_user( $user_id );
+		$level = $row['membership_level'] ?? TierRegistry::default_slug();
+		return TierRegistry::multiplier_for( $level );
 	}
 
 	/**
@@ -63,14 +58,18 @@ final class MembershipService {
 	}
 
 	/**
-	 * Re-evaluate tier based on lifetime stats. VIP is never auto-set or auto-removed.
+	 * Re-evaluate tier based on lifetime stats. Admin-only tiers (e.g. VIP)
+	 * are never auto-set or auto-removed — once a user is on one, they stay.
+	 *
 	 * Returns the new level (changed or unchanged).
 	 */
 	public static function evaluate_tier_upgrade( int $user_id ): string {
-		$row = self::get_for_user( $user_id );
-		$current = $row['membership_level'] ?? 'free';
+		$row     = self::get_for_user( $user_id );
+		$current = $row['membership_level'] ?? TierRegistry::default_slug();
 
-		if ( $current === 'vip' ) {
+		// Sticky admin tiers: never overwrite.
+		$current_def = TierRegistry::find( $current );
+		if ( $current_def && (int) $current_def['is_admin_only'] ) {
 			return $current;
 		}
 
@@ -87,19 +86,11 @@ final class MembershipService {
 	}
 
 	/**
-	 * Highest tier the user qualifies for, given (orders, spend).
+	 * Highest tier the user qualifies for, given (orders, spend). Walks
+	 * tiers descending by spend threshold; admin-only tiers are skipped.
 	 */
 	public static function compute_tier( array $stats ): string {
-		$orders = (int) ( $stats['total_orders'] ?? 0 );
-		$spend  = (float) ( $stats['lifetime_spend'] ?? 0 );
-
-		foreach ( [ 'gold', 'silver' ] as $tier ) {
-			$t = self::TIER_THRESHOLDS[ $tier ];
-			if ( $orders >= $t['orders'] || $spend >= $t['spend'] ) {
-				return $tier;
-			}
-		}
-		return 'free';
+		return TierRegistry::compute_for_stats( $stats );
 	}
 
 	/**
@@ -121,34 +112,44 @@ final class MembershipService {
 	}
 
 	/**
-	 * Progress info for the next tier the user could reach. Null if at the top.
+	 * Progress info for the next non-admin tier above the user's current one.
+	 * Null if the user is already at the top of the auto-eval ladder, or on
+	 * an admin-only tier (no further progress to track).
 	 *
 	 * @return array<string,mixed>|null
 	 */
 	public static function next_tier_progress( int $user_id, array $stats ): ?array {
-		$current = self::get_for_user( $user_id )['membership_level'] ?? 'free';
-		if ( in_array( $current, [ 'gold', 'vip' ], true ) ) {
+		$current_slug = self::get_for_user( $user_id )['membership_level'] ?? TierRegistry::default_slug();
+
+		$current_def = TierRegistry::find( $current_slug );
+		if ( $current_def && (int) $current_def['is_admin_only'] ) {
+			return null; // user is on a sticky tier — no auto-progress to show
+		}
+
+		$next = TierRegistry::next_above( $current_slug );
+		if ( ! $next ) {
 			return null;
 		}
 
-		$next = $current === 'free' ? 'silver' : 'gold';
-		$t    = self::TIER_THRESHOLDS[ $next ];
+		$orders_target = $next['threshold_orders'] !== null ? (int) $next['threshold_orders'] : 0;
+		$spend_target  = $next['threshold_spend']  !== null ? (float) $next['threshold_spend']  : 0.0;
 
-		// Pick whichever metric (orders vs spend) is closer.
-		$orders_pct = $t['orders'] > 0 ? min( 100, ( $stats['total_orders']   / $t['orders'] ) * 100 ) : 0;
-		$spend_pct  = $t['spend']  > 0 ? min( 100, ( $stats['lifetime_spend'] / $t['spend']  ) * 100 ) : 0;
+		// Pick whichever metric (orders vs spend) is closer. A null/0 target
+		// for either side falls back to the other.
+		$orders_pct = $orders_target > 0 ? min( 100, ( $stats['total_orders']   / $orders_target ) * 100 ) : 0;
+		$spend_pct  = $spend_target  > 0 ? min( 100, ( $stats['lifetime_spend'] / $spend_target  ) * 100 ) : 0;
 
-		$by_spend = $spend_pct >= $orders_pct;
+		$by_spend = $spend_target > 0 && $spend_pct >= $orders_pct;
 
 		return [
-			'level'       => $next,
-			'level_label' => Membership::LABELS[ $next ],
+			'level'       => (string) $next['slug'],
+			'level_label' => (string) $next['label'],
 			'metric'      => $by_spend ? 'spend' : 'orders',
 			'current'     => $by_spend ? round( (float) $stats['lifetime_spend'], 2 ) : (int) $stats['total_orders'],
-			'target'      => $by_spend ? (float) $t['spend'] : (int) $t['orders'],
+			'target'      => $by_spend ? $spend_target : $orders_target,
 			'remaining'   => $by_spend
-				? max( 0, round( $t['spend'] - $stats['lifetime_spend'], 2 ) )
-				: max( 0, $t['orders'] - $stats['total_orders'] ),
+				? max( 0, round( $spend_target - $stats['lifetime_spend'], 2 ) )
+				: max( 0, $orders_target - (int) $stats['total_orders'] ),
 			'percent'     => round( $by_spend ? $spend_pct : $orders_pct, 2 ),
 		];
 	}
@@ -172,7 +173,7 @@ final class MembershipService {
 	 * ============================================================ */
 
 	public static function set_level_admin( int $user_id, string $level ) {
-		if ( ! in_array( $level, Membership::LEVELS, true ) ) {
+		if ( ! TierRegistry::exists( $level ) ) {
 			return new \WP_Error( 'bad_level', __( 'Unknown membership level.', 'zippy-crm' ), [ 'status' => 400 ] );
 		}
 

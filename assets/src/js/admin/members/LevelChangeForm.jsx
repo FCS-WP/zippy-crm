@@ -1,15 +1,25 @@
 import { useState } from "react";
 import { useApiMutation } from "@/js/shared/hooks/useApi.js";
+import { useTiers } from "@/js/shared/hooks/useTiers.js";
 import { Button } from "@/js/shared/ui/button.jsx";
 
-const LEVELS = [
-	{ key: "free",   label: "Free",   note: "1× points multiplier" },
-	{ key: "silver", label: "Silver", note: "1.2× — auto-assigned at 5+ orders or $500+ spend" },
-	{ key: "gold",   label: "Gold",   note: "1.5× — auto-assigned at 15+ orders or $2000+ spend" },
-	{ key: "vip",    label: "VIP",    note: "2× — admin-assigned, sticky (auto-evaluator never removes)" },
-];
+/**
+ * Build a one-line note describing the tier's auto-eval rule, so the
+ * admin sees the consequence of picking each option.
+ */
+function noteFor(tier) {
+	if (tier.is_admin_only) {
+		return `${tier.multiplier}× — admin-assigned, sticky (auto-evaluator never removes)`;
+	}
+	const rules = [];
+	if (tier.threshold_orders) rules.push(`${tier.threshold_orders}+ orders`);
+	if (tier.threshold_spend)  rules.push(`$${tier.threshold_spend}+ spend`);
+	const auto = rules.length ? `auto-assigned at ${rules.join(" or ")}` : "default tier";
+	return `${tier.multiplier}× — ${auto}`;
+}
 
 export function LevelChangeForm({ row, onClose }) {
+	const { tiers, findTier } = useTiers();
 	const [next, setNext] = useState(row.level);
 	const [error, setError] = useState(null);
 
@@ -17,7 +27,12 @@ export function LevelChangeForm({ row, onClose }) {
 		invalidate: ["/admin/members"],
 	});
 
-	const isVipChange = (row.level === "vip" && next !== "vip") || (row.level !== "vip" && next === "vip");
+	const currentTier = findTier(row.level);
+	const nextTier    = findTier(next);
+	// Warn whenever the admin-only flag flips between current and next.
+	const isStickyChange =
+		currentTier && nextTier &&
+		Boolean(currentTier.is_admin_only) !== Boolean(nextTier.is_admin_only);
 
 	const onSubmit = (e) => {
 		e.preventDefault();
@@ -41,11 +56,11 @@ export function LevelChangeForm({ row, onClose }) {
 			</p>
 
 			<div className="zc-space-y-2">
-				{LEVELS.map((l) => {
-					const checked = next === l.key;
+				{tiers.map((tier) => {
+					const checked = next === tier.slug;
 					return (
 						<label
-							key={l.key}
+							key={tier.slug}
 							className={[
 								"zc-flex zc-cursor-pointer zc-items-start zc-gap-3 zc-rounded-md zc-border zc-p-3 zc-transition-colors",
 								checked
@@ -56,25 +71,32 @@ export function LevelChangeForm({ row, onClose }) {
 							<input
 								type="radio"
 								name="level"
-								value={l.key}
+								value={tier.slug}
 								checked={checked}
-								onChange={() => setNext(l.key)}
+								onChange={() => setNext(tier.slug)}
 								className="zc-mt-0.5"
 							/>
 							<div className="zc-flex-1">
-								<div className="zc-text-sm zc-font-medium zc-text-zinc-900">{l.label}</div>
-								<div className="zc-text-xs zc-text-zinc-500">{l.note}</div>
+								<div className="zc-text-sm zc-font-medium zc-text-zinc-900">
+									{tier.label}
+									{tier.is_admin_only ? (
+										<span className="zc-ml-2 zc-rounded zc-bg-zinc-100 zc-px-1.5 zc-py-0.5 zc-text-[10px] zc-uppercase zc-tracking-wide zc-text-zinc-500">
+											admin only
+										</span>
+									) : null}
+								</div>
+								<div className="zc-text-xs zc-text-zinc-500">{noteFor(tier)}</div>
 							</div>
 						</label>
 					);
 				})}
 			</div>
 
-			{isVipChange ? (
+			{isStickyChange ? (
 				<div className="zc-rounded-md zc-border zc-border-amber-200 zc-bg-amber-50 zc-px-3 zc-py-2 zc-text-sm zc-text-amber-900">
-					{next === "vip"
-						? "VIP is sticky — once set, the auto-evaluator will never downgrade them."
-						: "Removing VIP — the auto-evaluator will start managing this member's tier again on the next completed order."}
+					{nextTier.is_admin_only
+						? `${nextTier.label} is sticky — once set, the auto-evaluator will never downgrade them.`
+						: `Removing ${currentTier.label} — the auto-evaluator will start managing this member's tier again on the next completed order.`}
 				</div>
 			) : null}
 

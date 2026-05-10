@@ -23,6 +23,7 @@ final class Installer {
 		'crm_notif_subs.sql',
 		'crm_notification_log.sql',
 		'crm_audit_log.sql',
+		'crm_tiers.sql',
 	];
 
 	public static function run(): void {
@@ -32,7 +33,62 @@ final class Installer {
 			dbDelta( QueryLoader::schema( $file ) );
 		}
 
+		// Data migrations after the schema runs.
+		self::seed_default_tiers();
+
 		update_option( self::OPTION_VERSION, ZIPPY_CRM_VERSION, false );
+	}
+
+	/**
+	 * Seed the four canonical tiers when crm_tiers is empty.
+	 *
+	 * Idempotent: only inserts rows that don't exist (`INSERT IGNORE` on PK
+	 * `slug`). Legacy `crm_memberships.membership_level` values (free/silver/
+	 * gold/vip) MUST resolve to a row here after this runs — we'd otherwise
+	 * orphan every existing membership the moment crm_tiers becomes the
+	 * source of truth.
+	 *
+	 * Reads multiplier/threshold values from the (still-present) Membership
+	 * + MembershipService constants to keep one source of truth at seed time.
+	 */
+	private static function seed_default_tiers(): void {
+		global $wpdb;
+		$table = $wpdb->prefix . 'crm_tiers';
+
+		// Skip the work if the table already has rows — admin may have edited
+		// labels/multipliers and we don't want to clobber that on every boot.
+		// (dbDelta has already created the table by the time we get here.)
+		$existing = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+		if ( $existing > 0 ) {
+			return;
+		}
+
+		$now      = gmdate( 'Y-m-d H:i:s' );
+		$defaults = [
+			[ 'slug' => 'free',   'label' => 'Free',   'multiplier' => 1.00, 'orders' => null, 'spend' => null,    'admin_only' => 0, 'sort' => 10 ],
+			[ 'slug' => 'silver', 'label' => 'Silver', 'multiplier' => 1.20, 'orders' => 5,    'spend' => 500.00,  'admin_only' => 0, 'sort' => 20 ],
+			[ 'slug' => 'gold',   'label' => 'Gold',   'multiplier' => 1.50, 'orders' => 15,   'spend' => 2000.00, 'admin_only' => 0, 'sort' => 30 ],
+			[ 'slug' => 'vip',    'label' => 'VIP',    'multiplier' => 2.00, 'orders' => null, 'spend' => null,    'admin_only' => 1, 'sort' => 40 ],
+		];
+
+		// Use $wpdb->insert so PHP `null` correctly serializes to SQL NULL —
+		// $wpdb->prepare() with %s would turn null into the empty string.
+		foreach ( $defaults as $t ) {
+			$wpdb->insert(
+				$table,
+				[
+					'slug'             => $t['slug'],
+					'label'            => $t['label'],
+					'multiplier'       => $t['multiplier'],
+					'threshold_orders' => $t['orders'],
+					'threshold_spend'  => $t['spend'],
+					'is_admin_only'    => $t['admin_only'],
+					'sort_order'       => $t['sort'],
+					'created_at'       => $now,
+				],
+				[ '%s', '%s', '%f', '%d', '%f', '%d', '%d', '%s' ]
+			);
+		}
 	}
 
 	/**

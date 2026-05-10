@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useApiMutation } from "@/js/shared/hooks/useApi.js";
 import { Button } from "@/js/shared/ui/button.jsx";
 import { Input } from "@/js/shared/ui/input.jsx";
+import { DateTimeField } from "./DateTimeField.jsx";
 
 const EMPTY = {
 	code: "",
@@ -11,25 +12,37 @@ const EMPTY = {
 	discount_value: "",
 	min_order_amount: "",
 	max_uses: "",
-	starts_at: "",
-	expires_at: "",
+	starts_at: null,
+	expires_at: null,
 };
 
 /**
- * Convert an ISO timestamp from the API to the format `<input type="datetime-local">`
- * expects (`YYYY-MM-DDTHH:MM`). Returns "" for null/undefined.
+ * Random voucher code: 4-letter readable prefix + 4 alphanumerics. Matches
+ * the server-side regex (^[A-Z0-9_-]{3,50}$). 36^4 ≈ 1.7M suffix combos,
+ * so collisions are rare; the server still rejects duplicates with 409 if
+ * one slips through.
+ *
+ * Skips visually-confusing chars (I, O, 0, 1) so codes are easier to read
+ * out loud or copy by hand.
  */
-function isoToLocal(iso) {
-	if (!iso) return "";
-	return iso.slice(0, 16);
+function generateCode() {
+	const ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+	const ALNUM = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+	const pick = (chars) => chars[Math.floor(Math.random() * chars.length)];
+	let prefix = "";
+	for (let i = 0; i < 4; i++) prefix += pick(ALPHA);
+	let suffix = "";
+	for (let i = 0; i < 4; i++) suffix += pick(ALNUM);
+	return prefix + suffix;
 }
 
-/** Convert form-local datetime back to MySQL UTC datetime (server expects UTC). */
-function localToMysql(local) {
-	if (!local) return null;
-	const date = new Date(local);
-	if (Number.isNaN(date.getTime())) return null;
-	return date.toISOString().slice(0, 19).replace("T", " ");
+/** API serves ISO ("...Z"); DateTimeField + backend both prefer MySQL. */
+function isoToMysql(iso) {
+	if (!iso) return null;
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return null;
+	const pad = (n) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
 }
 
 function fromRow(row) {
@@ -42,8 +55,8 @@ function fromRow(row) {
 		discount_value: row.discount_value ?? "",
 		min_order_amount: row.min_order_amount ?? "",
 		max_uses: row.max_uses ?? "",
-		starts_at: isoToLocal(row.starts_at),
-		expires_at: isoToLocal(row.expires_at),
+		starts_at: isoToMysql(row.starts_at),
+		expires_at: isoToMysql(row.expires_at),
 	};
 }
 
@@ -71,8 +84,8 @@ export function VoucherForm({ row, onClose }) {
 			discount_value: Number(form.discount_value) || 0,
 			min_order_amount: Number(form.min_order_amount) || 0,
 			max_uses: Number(form.max_uses) || 0,
-			starts_at: localToMysql(form.starts_at),
-			expires_at: localToMysql(form.expires_at),
+			starts_at: form.starts_at,
+			expires_at: form.expires_at,
 		};
 		if (!isEdit) {
 			payload.code = form.code.trim().toUpperCase();
@@ -93,13 +106,29 @@ export function VoucherForm({ row, onClose }) {
 			) : null}
 
 			<Field label="Code" hint={isEdit ? "Locked once created — code is wired to the WC coupon." : "3-50 chars: A-Z 0-9 _ -"}>
-				<Input
-					value={form.code}
-					onChange={set("code")}
-					placeholder="SUMMER25"
-					required
-					disabled={isEdit}
-				/>
+				<div className="zc-flex zc-gap-2">
+					<Input
+						value={form.code}
+						onChange={set("code")}
+						placeholder="SUMMER25"
+						required
+						disabled={isEdit}
+					/>
+					{!isEdit ? (
+						<button
+							type="button"
+							onClick={() => setForm((f) => ({ ...f, code: generateCode() }))}
+							className="zc-inline-flex zc-h-10 zc-shrink-0 zc-items-center zc-gap-1.5 zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-px-3 zc-text-sm zc-font-medium zc-text-zinc-700 hover:zc-bg-zinc-50"
+							title="Generate random code"
+						>
+							<svg viewBox="0 0 24 24" className="zc-size-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+								<path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 1 1-3-6.7" />
+								<path strokeLinecap="round" strokeLinejoin="round" d="M21 4v5h-5" />
+							</svg>
+							Generate
+						</button>
+					) : null}
+				</div>
 			</Field>
 
 			<Field label="Title">
@@ -150,10 +179,18 @@ export function VoucherForm({ row, onClose }) {
 
 			<div className="zc-grid zc-grid-cols-2 zc-gap-4">
 				<Field label="Starts at">
-					<Input type="datetime-local" value={form.starts_at} onChange={set("starts_at")} />
+					<DateTimeField
+						value={form.starts_at}
+						onChange={(v) => setForm((f) => ({ ...f, starts_at: v }))}
+						placeholder="Optional — start date"
+					/>
 				</Field>
 				<Field label="Expires at">
-					<Input type="datetime-local" value={form.expires_at} onChange={set("expires_at")} />
+					<DateTimeField
+						value={form.expires_at}
+						onChange={(v) => setForm((f) => ({ ...f, expires_at: v }))}
+						placeholder="Optional — expiry date"
+					/>
 				</Field>
 			</div>
 

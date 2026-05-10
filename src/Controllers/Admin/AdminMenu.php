@@ -24,6 +24,8 @@ final class AdminMenu {
 
 		add_submenu_page( self::PARENT_SLUG, __( 'Members',  'zippy-crm' ), __( 'Members',  'zippy-crm' ),
 			'manage_woocommerce', self::PARENT_SLUG,             [ MembersController::class,  'render' ] );
+		add_submenu_page( self::PARENT_SLUG, __( 'Tiers',    'zippy-crm' ), __( 'Tiers',    'zippy-crm' ),
+			'manage_woocommerce', self::PARENT_SLUG . '-tiers',    [ TiersController::class,    'render' ] );
 		add_submenu_page( self::PARENT_SLUG, __( 'Vouchers', 'zippy-crm' ), __( 'Vouchers', 'zippy-crm' ),
 			'manage_woocommerce', self::PARENT_SLUG . '-vouchers', [ VouchersController::class, 'render' ] );
 		add_submenu_page( self::PARENT_SLUG, __( 'Points',   'zippy-crm' ), __( 'Points',   'zippy-crm' ),
