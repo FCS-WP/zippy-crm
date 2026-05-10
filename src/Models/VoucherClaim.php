@@ -112,6 +112,23 @@ final class VoucherClaim {
 		$wpdb->delete( self::table(), [ 'user_id' => $user_id ], [ '%d' ] );
 	}
 
+	/**
+	 * Counts for the My Account Membership widget. `active` mirrors the same
+	 * predicate as list_my_claims.sql (currently usable). `used` is total
+	 * lifetime redemptions.
+	 *
+	 * @return array{active:int, used:int}
+	 */
+	public static function counts_for_user( int $user_id ): array {
+		global $wpdb;
+		$active_sql = QueryLoader::query( 'vouchers/count_active_my_claims.sql' );
+		$used_sql   = QueryLoader::query( 'vouchers/count_used_my_claims.sql' );
+		return [
+			'active' => (int) $wpdb->get_var( $wpdb->prepare( $active_sql, $user_id, DateTimeHelper::now_mysql() ) ),
+			'used'   => (int) $wpdb->get_var( $wpdb->prepare( $used_sql,   $user_id ) ),
+		];
+	}
+
 	/* ============================================================
 	 * Admin
 	 * ============================================================ */

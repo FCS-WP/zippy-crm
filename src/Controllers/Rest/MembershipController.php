@@ -2,7 +2,10 @@
 namespace ZippyCrm\Controllers\Rest;
 
 use ZippyCrm\Models\Membership;
+use ZippyCrm\Models\PointsLedger;
+use ZippyCrm\Models\VoucherClaim;
 use ZippyCrm\Services\MembershipService;
+use ZippyCrm\Services\PointsEngine;
 use ZippyCrm\Services\TierRegistry;
 use ZippyCrm\Support\DateTimeHelper;
 use ZippyCrm\Support\RestResponse;
@@ -35,6 +38,15 @@ final class MembershipController {
 		$user  = get_userdata( $user_id );
 		$level = $row['membership_level'] ?? 'free';
 
+		$points_summary  = PointsEngine::get_summary( $user_id );
+		$month_start_utc = gmdate( 'Y-m-01 00:00:00' );
+		$earned_month    = PointsLedger::sum_earned_since( $user_id, $month_start_utc );
+		$voucher_counts  = VoucherClaim::counts_for_user( $user_id );
+		$account_links   = function_exists( 'wc_get_endpoint_url' ) ? [
+			'points'   => wc_get_endpoint_url( 'crm-points',   '', wc_get_page_permalink( 'myaccount' ) ),
+			'vouchers' => wc_get_endpoint_url( 'crm-vouchers', '', wc_get_page_permalink( 'myaccount' ) ),
+		] : [ 'points' => '', 'vouchers' => '' ];
+
 		return RestResponse::ok( [
 			'user' => [
 				'id'           => $user_id,
@@ -49,6 +61,23 @@ final class MembershipController {
 			'expires_at'  => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
 			'stats'       => $stats,
 			'next_tier'   => MembershipService::next_tier_progress( $user_id, $stats ),
+			'points'      => [
+				'balance'        => (int) $points_summary['balance'],
+				'total_earned'   => (int) $points_summary['total_earned'],
+				'total_redeemed' => (int) $points_summary['total_redeemed'],
+				'earned_month'   => $earned_month,
+			],
+			'vouchers'    => $voucher_counts,
+			'links'       => $account_links,
+			'tiers'       => array_map( static fn( array $t ) => [
+				'slug'             => (string) $t['slug'],
+				'label'            => (string) $t['label'],
+				'multiplier'       => (float)  $t['multiplier'],
+				'threshold_orders' => $t['threshold_orders'] !== null ? (int)   $t['threshold_orders'] : null,
+				'threshold_spend'  => $t['threshold_spend']  !== null ? (float) $t['threshold_spend']  : null,
+				'is_admin_only'    => (bool)   $t['is_admin_only'],
+				'sort_order'       => (int)    $t['sort_order'],
+			], TierRegistry::all() ),
 		] );
 	}
 
