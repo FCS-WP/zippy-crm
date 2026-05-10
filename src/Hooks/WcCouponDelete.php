@@ -126,9 +126,9 @@ final class WcCouponDelete {
 
 		$wpdb->update(
 			$wpdb->prefix . VoucherClaim::TABLE,
-			[ 'status' => 'expired' ],
+			[ 'status' => 'expired', 'revocation_reason' => 'cascade_coupon' ],
 			[ 'voucher_id' => $voucher_id, 'status' => 'claimed' ],
-			[ '%s' ],
+			[ '%s', '%s' ],
 			[ '%d', '%s' ]
 		);
 
@@ -172,9 +172,9 @@ final class WcCouponDelete {
 		if ( $user_id > 0 ) {
 			$wpdb->update(
 				$wpdb->prefix . VoucherClaim::TABLE,
-				[ 'status' => 'expired' ],
+				[ 'status' => 'expired', 'revocation_reason' => 'cascade_coupon' ],
 				[ 'voucher_id' => $voucher_id, 'code_id' => $code_id, 'status' => 'claimed' ],
-				[ '%s' ],
+				[ '%s', '%s' ],
 				[ '%d', '%d', '%s' ]
 			);
 			ClaimHandler::invalidate_user_cache( $user_id );
