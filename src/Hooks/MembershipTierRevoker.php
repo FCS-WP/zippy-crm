@@ -94,9 +94,9 @@ final class MembershipTierRevoker {
 
 		$wpdb->update(
 			$wpdb->prefix . VoucherClaim::TABLE,
-			[ 'status' => 'expired' ],
+			[ 'status' => 'expired', 'revocation_reason' => 'tier_downgrade' ],
 			[ 'id' => $claim_id, 'status' => 'claimed' ],
-			[ '%s' ],
+			[ '%s', '%s' ],
 			[ '%d', '%s' ]
 		);
 

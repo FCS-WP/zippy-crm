@@ -102,6 +102,12 @@ return [
 		'auth'    => 'user',
 	],
 	[
+		'method'  => 'GET',
+		'path'    => '/vouchers/claims/history',
+		'handler' => [ VouchersController::class, 'list_my_claims_history' ],
+		'auth'    => 'user',
+	],
+	[
 		'method'  => 'POST',
 		'path'    => '/vouchers/(?P<id>\d+)/claim',
 		'handler' => [ VouchersController::class, 'claim' ],

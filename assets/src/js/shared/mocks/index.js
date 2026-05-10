@@ -19,6 +19,7 @@ const LIVE_ROUTES = new Set([
 	"DELETE /points/apply",
 	"GET /vouchers",
 	"GET /vouchers/claims",
+	"GET /vouchers/claims/history",
 	"GET /notifications/preferences",
 	"PUT /notifications/preferences",
 	// Admin
