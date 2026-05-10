@@ -99,9 +99,11 @@ These are linked from [CLAUDE.md](../CLAUDE.md) and they're not optional:
 
 A few non-obvious decisions worth knowing:
 
-### 1. **Reserve-on-click, debit-on-completion** for any "lock points/quota" flow
-- Points redemption uses this: clicking Redeem creates a coupon and writes a `pending_redeem` ledger row (points=0, `reserved_points` populated, `pending_status='active'`). The actual debit happens on `woocommerce_order_status_completed` when the coupon is consumed.
-- If you build anything that reserves a resource, mirror this. Three-layer idempotency: order meta (fast skip) + coupon meta (verify ours) + conditional `UPDATE … WHERE pending_status='active'` (one-winner race).
+### 1. **Points = cash tender at checkout. Vouchers = promotional coupons. Don't conflate them.**
+- **Points** apply via [`PointsTender`](../src/Services/PointsTender.php): customer slides "use N pts" on the cart page → REST writes to `WC()->session`. A `cart_calculate_fees` hook reads the session and adds a negative fee. On `order_status_completed`, the debit settles (idempotent via `_zc_points_settled`). On refund, points credit back proportionally.
+- **Vouchers** are real `WC_Coupon` objects with full eligibility rules (min order, percent vs fixed, individual_use, etc.). Promotional discounts that the merchant gave away.
+- The two should never be implemented through the same primitive again — they had different semantics, refund behavior, tax treatment, and stacking rules.
+- v1.7 had a "reserve-on-click, debit-on-completion" coupon-based flow for points. Retired in v1.8 because mixing stored value with coupon mechanics led to bugs around stacking, tax, and refunds. Legacy `pending_redeem` ledger rows + `idx_pending` + `reserved_points` column remain for backward compat / audit but are no longer written.
 
 ### 2. **Routes are declarative, controllers are pure**
 - All routes live in [src/Core/routes.php](../src/Core/routes.php) as an array

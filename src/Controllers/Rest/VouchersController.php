@@ -187,18 +187,35 @@ final class VouchersController {
 	 * update agree on the shape; service layer does the validation.
 	 */
 	private static function extract_voucher_payload( \WP_REST_Request $request ): array {
-		$keys = [
+		// Scalars (REST gives strings/ints for these — model casts further).
+		$scalar_keys = [
 			'code', 'title', 'description',
-			'discount_type', 'discount_value', 'min_order_amount',
-			'max_uses', 'starts_at', 'expires_at',
+			'discount_type', 'discount_value',
+			'min_order_amount', 'max_order_amount',
+			'max_uses', 'usage_limit_per_user', 'limit_usage_to_x_items',
+			'individual_use', 'exclude_sale_items', 'free_shipping',
+			'starts_at', 'expires_at',
 		];
+
+		// Array / object fields (JSON in the column). Values may arrive as
+		// arrays (JSON-decoded by the WP REST machinery when sent as JSON) or
+		// as JSON strings (form-encoded fallback). Voucher::encode_json
+		// handles both.
+		$json_keys = Voucher::JSON_FIELDS;
+
 		$out = [];
-		foreach ( $keys as $key ) {
+		foreach ( array_merge( $scalar_keys, $json_keys ) as $key ) {
 			$value = $request->get_param( $key );
 			if ( $value === null ) {
 				continue;
 			}
-			$out[ $key ] = $value === '' ? null : $value;
+			// Empty string → null only for scalars. JSON columns let
+			// encode_json normalise empty arrays / "[]" / "" all to null.
+			if ( in_array( $key, $json_keys, true ) ) {
+				$out[ $key ] = $value;
+			} else {
+				$out[ $key ] = $value === '' ? null : $value;
+			}
 		}
 		return $out;
 	}
@@ -207,24 +224,37 @@ final class VouchersController {
 		if ( ! $row ) {
 			return [];
 		}
+		$row  = Voucher::decode_json_fields( $row );
 		$max  = (int) $row['max_uses'];
 		$used = (int) $row['uses_count'];
 		return [
-			'id'               => (int) $row['id'],
-			'code'             => (string) $row['code'],
-			'title'            => (string) $row['title'],
-			'description'      => $row['description'] ?? null,
-			'discount_type'    => (string) $row['discount_type'],
-			'discount_value'   => (float) $row['discount_value'],
-			'min_order_amount' => (float) $row['min_order_amount'],
-			'max_uses'         => $max,
-			'uses_count'       => $used,
-			'remaining_uses'   => $max > 0 ? max( 0, $max - $used ) : null,
-			'status'           => (string) $row['status'],
-			'starts_at'        => DateTimeHelper::mysql_to_iso( $row['starts_at'] ?? null ),
-			'expires_at'       => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
-			'created_by'       => (int) $row['created_by'],
-			'created_at'       => DateTimeHelper::mysql_to_iso( $row['created_at'] ?? null ),
+			'id'                          => (int) $row['id'],
+			'code'                        => (string) $row['code'],
+			'title'                       => (string) $row['title'],
+			'description'                 => $row['description'] ?? null,
+			'discount_type'               => (string) $row['discount_type'],
+			'discount_value'              => (float) $row['discount_value'],
+			'min_order_amount'            => (float) ( $row['min_order_amount'] ?? 0 ),
+			'max_order_amount'            => (float) ( $row['max_order_amount'] ?? 0 ),
+			'max_uses'                    => $max,
+			'uses_count'                  => $used,
+			'remaining_uses'              => $max > 0 ? max( 0, $max - $used ) : null,
+			'usage_limit_per_user'        => (int) ( $row['usage_limit_per_user']   ?? 0 ),
+			'limit_usage_to_x_items'      => (int) ( $row['limit_usage_to_x_items'] ?? 0 ),
+			'individual_use'              => (bool) ( $row['individual_use']     ?? true ),
+			'exclude_sale_items'          => (bool) ( $row['exclude_sale_items'] ?? false ),
+			'free_shipping'               => (bool) ( $row['free_shipping']      ?? false ),
+			'email_restrictions'          => $row['email_restrictions'],
+			'product_ids'                 => $row['product_ids'],
+			'excluded_product_ids'        => $row['excluded_product_ids'],
+			'product_categories'          => $row['product_categories'],
+			'excluded_product_categories' => $row['excluded_product_categories'],
+			'allowed_hours'               => $row['allowed_hours'],
+			'status'                      => (string) $row['status'],
+			'starts_at'                   => DateTimeHelper::mysql_to_iso( $row['starts_at'] ?? null ),
+			'expires_at'                  => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
+			'created_by'                  => (int) $row['created_by'],
+			'created_at'                  => DateTimeHelper::mysql_to_iso( $row['created_at'] ?? null ),
 		];
 	}
 

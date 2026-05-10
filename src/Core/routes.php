@@ -18,6 +18,7 @@
 defined( 'ABSPATH' ) || exit;
 
 use ZippyCrm\Controllers\Rest\AuditController;
+use ZippyCrm\Controllers\Rest\CatalogController;
 use ZippyCrm\Controllers\Rest\MembershipController;
 use ZippyCrm\Controllers\Rest\NotificationsController;
 use ZippyCrm\Controllers\Rest\PointsController;
@@ -60,6 +61,29 @@ return [
 		'args'    => [
 			'points' => [ 'type' => 'integer', 'required' => true, 'minimum' => ZIPPY_CRM_MIN_REDEMPTION ],
 		],
+	],
+	// New v1.8.0 cart-tender flow. The customer applies points to their cart;
+	// the actual debit happens when the order completes (PointsTender::settle_for_order).
+	[
+		'method'  => 'GET',
+		'path'    => '/points/applicable',
+		'handler' => [ PointsController::class, 'applicable' ],
+		'auth'    => 'user',
+	],
+	[
+		'method'  => 'POST',
+		'path'    => '/points/apply',
+		'handler' => [ PointsController::class, 'apply' ],
+		'auth'    => 'user',
+		'args'    => [
+			'points' => [ 'type' => 'integer', 'required' => true, 'minimum' => 0 ],
+		],
+	],
+	[
+		'method'  => 'DELETE',
+		'path'    => '/points/apply',
+		'handler' => [ PointsController::class, 'clear_apply' ],
+		'auth'    => 'user',
 	],
 
 	// -------- Vouchers (customer) --------
@@ -299,6 +323,41 @@ return [
 		'handler' => [ TiersController::class, 'admin_delete' ],
 		'auth'    => 'manage_woocommerce',
 		'args'    => [ 'slug' => [ 'type' => 'string', 'required' => true ] ],
+	],
+
+	// -------- Catalog lookup (admin, for voucher product/category picker) --------
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/catalog/products',
+		'handler' => [ CatalogController::class, 'search_products' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [
+			'search'   => [ 'type' => 'string',  'default' => '' ],
+			'ids'      => [ 'type' => 'string',  'default' => '' ],
+			'per_page' => [ 'type' => 'integer', 'default' => 20 ],
+		],
+	],
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/catalog/categories',
+		'handler' => [ CatalogController::class, 'search_categories' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [
+			'search'   => [ 'type' => 'string',  'default' => '' ],
+			'ids'      => [ 'type' => 'string',  'default' => '' ],
+			'per_page' => [ 'type' => 'integer', 'default' => 20 ],
+		],
+	],
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/catalog/customers',
+		'handler' => [ CatalogController::class, 'search_customers' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [
+			'search'   => [ 'type' => 'string',  'default' => '' ],
+			'ids'      => [ 'type' => 'string',  'default' => '' ],
+			'per_page' => [ 'type' => 'integer', 'default' => 20 ],
+		],
 	],
 
 	// -------- Audit log (admin) --------

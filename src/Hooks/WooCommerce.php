@@ -20,8 +20,20 @@ final class WooCommerce {
 		// Tier evaluation + points (Points engine TODO)
 		add_action( 'woocommerce_order_status_completed', [ self::class, 'on_order_completed' ] );
 
+		// Cart page: mount-point for the points-tender widget. Renders just
+		// above the totals box so the user sees "Use points" before they see
+		// what they owe. The empty <div> is hydrated by the cart bundle.
+		add_action( 'woocommerce_before_cart_totals',     [ self::class, 'render_cart_points_mount' ] );
+
 		// Cleanup on user delete
 		add_action( 'delete_user',                        [ self::class, 'on_user_deleted' ] );
+	}
+
+	public static function render_cart_points_mount(): void {
+		if ( ! is_user_logged_in() ) {
+			return;
+		}
+		echo '<div id="zippy-crm-cart-points" class="zippy-crm-mount"></div>';
 	}
 
 	public static function on_customer_created( int $user_id, array $data = [], bool $password_generated = false ): void {
@@ -47,13 +59,18 @@ final class WooCommerce {
 		// Order matters:
 		//   1. tier (so the multiplier reflects the new level on the very order
 		//      that pushed them up to it)
-		//   2. earn (uses subtotal-after-discounts, so any applied coupon already
-		//      reduces the earned amount appropriately)
-		//   3. consume reservations (debit points locked in CRM-RDM coupons used here)
-		//   4. consume voucher claims (mark used + bump uses_count for CRM vouchers used here)
+		//   2. earn (uses subtotal-after-discounts, so any applied voucher coupon
+		//      already reduces the earned amount appropriately; the points-tender
+		//      fee is post-tax so it doesn't affect subtotal here)
+		//   3. settle voucher claims (mark used + bump uses_count for CRM
+		//      vouchers used on this order)
+		//
+		// Note: PointsTender::settle_for_order runs at priority 30 on this
+		// same hook (registered separately in PointsTender::register), so the
+		// points debit happens AFTER everything above. That's correct — the
+		// debit shouldn't influence earn calculations.
 		MembershipService::evaluate_tier_upgrade( $user_id );
 		PointsEngine::award_for_order( $order_id );
-		PointsEngine::consume_redemptions_for_order( $order_id );
 		ClaimHandler::consume_for_order( $order_id );
 	}
 

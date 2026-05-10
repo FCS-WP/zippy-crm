@@ -18,7 +18,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'ZIPPY_CRM_VERSION',  '1.7.0' );
+define( 'ZIPPY_CRM_VERSION',  '1.9.0' );
 define( 'ZIPPY_CRM_FILE',     __FILE__ );
 define( 'ZIPPY_CRM_DIR',      plugin_dir_path( __FILE__ ) );
 define( 'ZIPPY_CRM_URL',      plugin_dir_url( __FILE__ ) );

@@ -35,8 +35,37 @@ final class Installer {
 
 		// Data migrations after the schema runs.
 		self::seed_default_tiers();
+		self::expire_legacy_pending_redemptions();
 
 		update_option( self::OPTION_VERSION, ZIPPY_CRM_VERSION, false );
+	}
+
+	/**
+	 * One-time migration for v1.8.0: when points moved from coupon-based
+	 * redemption (with a 24h pending hold) to session-based "tender at
+	 * checkout", legacy `pending_redeem` ledger rows became dead state.
+	 *
+	 * Mark every still-active row as `expired` — the points were never
+	 * debited (points=0 on those rows by design), so no balance arithmetic
+	 * changes. The customer's `available` balance, which used to subtract
+	 * these reservations, now equals their gross balance again.
+	 *
+	 * The unused WC_Coupons those rows referenced will expire naturally per
+	 * their `date_expires` (24h after creation) and become invisible.
+	 *
+	 * Idempotent: a re-run finds zero matching rows.
+	 */
+	private static function expire_legacy_pending_redemptions(): void {
+		global $wpdb;
+		$table = $wpdb->prefix . 'crm_points_ledger';
+		$wpdb->query( $wpdb->prepare(
+			"UPDATE {$table}
+			 SET pending_status = %s
+			 WHERE type = %s AND pending_status = %s",
+			'expired',
+			'pending_redeem',
+			'active'
+		) );
 	}
 
 	/**

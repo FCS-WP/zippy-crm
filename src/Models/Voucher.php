@@ -67,6 +67,27 @@ final class Voucher {
 	 * arbitrary statuses here would create active CRM vouchers with no WC
 	 * coupon, breaking customer checkout silently.
 	 */
+	/**
+	 * Columns whose stored value is a JSON-encoded array (or null when no
+	 * restriction applies). Used by both create() and update() so the rules
+	 * for shape and serialization live in one place.
+	 *
+	 *   email_restrictions          → array<int,string>      (allowed emails)
+	 *   product_ids                 → array<int,int>         (allow-list)
+	 *   excluded_product_ids        → array<int,int>         (block-list)
+	 *   product_categories          → array<int,int>         (allow-list)
+	 *   excluded_product_categories → array<int,int>         (block-list)
+	 *   allowed_hours               → { days, from_minute, to_minute }
+	 */
+	public const JSON_FIELDS = [
+		'email_restrictions',
+		'product_ids',
+		'excluded_product_ids',
+		'product_categories',
+		'excluded_product_categories',
+		'allowed_hours',
+	];
+
 	public static function create( array $data, int $created_by ): int {
 		global $wpdb;
 		$ok = $wpdb->insert(
@@ -78,16 +99,80 @@ final class Voucher {
 				'discount_type'    => (string) $data['discount_type'],
 				'discount_value'   => (float) $data['discount_value'],
 				'min_order_amount' => (float) ( $data['min_order_amount'] ?? 0 ),
+				'max_order_amount' => (float) ( $data['max_order_amount'] ?? 0 ),
 				'max_uses'         => (int) ( $data['max_uses'] ?? 0 ),
+				'usage_limit_per_user'   => (int) ( $data['usage_limit_per_user']   ?? 0 ),
+				'limit_usage_to_x_items' => (int) ( $data['limit_usage_to_x_items'] ?? 0 ),
+				'individual_use'     => isset( $data['individual_use'] )     ? (int) (bool) $data['individual_use']     : 1,
+				'exclude_sale_items' => isset( $data['exclude_sale_items'] ) ? (int) (bool) $data['exclude_sale_items'] : 0,
+				'free_shipping'      => isset( $data['free_shipping'] )      ? (int) (bool) $data['free_shipping']      : 0,
+				'email_restrictions'          => self::encode_json( $data['email_restrictions']          ?? null ),
+				'product_ids'                 => self::encode_json( $data['product_ids']                 ?? null ),
+				'excluded_product_ids'        => self::encode_json( $data['excluded_product_ids']        ?? null ),
+				'product_categories'          => self::encode_json( $data['product_categories']          ?? null ),
+				'excluded_product_categories' => self::encode_json( $data['excluded_product_categories'] ?? null ),
+				'allowed_hours'               => self::encode_json( $data['allowed_hours']               ?? null ),
 				'status'           => 'draft',
 				'starts_at'        => $data['starts_at'] ?? null,
 				'expires_at'       => $data['expires_at'] ?? null,
 				'created_by'       => $created_by,
 				'created_at'       => DateTimeHelper::now_mysql(),
 			],
-			[ '%s', '%s', '%s', '%s', '%f', '%f', '%d', '%s', '%s', '%s', '%d', '%s' ]
+			// Order matches the array above. JSON fields stored as strings (%s).
+			[
+				'%s', '%s', '%s', '%s', '%f',           // code, title, description, discount_type, discount_value
+				'%f', '%f',                              // min/max order
+				'%d', '%d', '%d',                        // max_uses, usage_limit_per_user, limit_usage_to_x_items
+				'%d', '%d', '%d',                        // individual_use, exclude_sale_items, free_shipping
+				'%s', '%s', '%s', '%s', '%s', '%s',      // 6 JSON fields
+				'%s', '%s', '%s', '%d', '%s',            // status, starts_at, expires_at, created_by, created_at
+			]
 		);
 		return $ok ? (int) $wpdb->insert_id : 0;
+	}
+
+	/**
+	 * Encode an array (or null) to a JSON string for storage. Returns null
+	 * for null / empty array so the column reads as "no restriction" rather
+	 * than the literal string "[]".
+	 */
+	private static function encode_json( $value ): ?string {
+		if ( $value === null || $value === '' ) {
+			return null;
+		}
+		// Form might submit JSON strings already (e.g. from the React side).
+		if ( is_string( $value ) ) {
+			$decoded = json_decode( $value, true );
+			$value   = is_array( $decoded ) ? $decoded : null;
+		}
+		if ( ! is_array( $value ) || empty( $value ) ) {
+			return null;
+		}
+		return wp_json_encode( $value );
+	}
+
+	/**
+	 * Decode a stored row's JSON columns into PHP arrays so callers (REST
+	 * controller, sync_wc_coupon) don't have to remember which fields are
+	 * serialized. Mutates a copy and returns it.
+	 *
+	 * @param array<string,mixed> $row
+	 * @return array<string,mixed>
+	 */
+	public static function decode_json_fields( array $row ): array {
+		foreach ( self::JSON_FIELDS as $field ) {
+			if ( ! array_key_exists( $field, $row ) ) {
+				continue;
+			}
+			$raw = $row[ $field ];
+			if ( $raw === null || $raw === '' ) {
+				$row[ $field ] = null;
+				continue;
+			}
+			$decoded = json_decode( (string) $raw, true );
+			$row[ $field ] = is_array( $decoded ) ? $decoded : null;
+		}
+		return $row;
 	}
 
 	public static function update_status( int $id, string $status ): bool {
@@ -215,26 +300,45 @@ final class Voucher {
 	 *   - `uses_count`                   only increment_uses() may write this
 	 */
 	public static function update( int $id, array $data ): bool {
-		$allowed = [
-			'title'            => '%s',
-			'description'      => '%s',
-			'discount_type'    => '%s',
-			'discount_value'   => '%f',
-			'min_order_amount' => '%f',
-			'max_uses'         => '%d',
-			'starts_at'        => '%s',
-			'expires_at'       => '%s',
+		// scalar columns + their wpdb format specifier
+		$scalars = [
+			'title'                   => '%s',
+			'description'             => '%s',
+			'discount_type'           => '%s',
+			'discount_value'          => '%f',
+			'min_order_amount'        => '%f',
+			'max_order_amount'        => '%f',
+			'max_uses'                => '%d',
+			'usage_limit_per_user'    => '%d',
+			'limit_usage_to_x_items'  => '%d',
+			'individual_use'          => '%d',
+			'exclude_sale_items'      => '%d',
+			'free_shipping'           => '%d',
+			'starts_at'               => '%s',
+			'expires_at'              => '%s',
 		];
+		$booleans = [ 'individual_use', 'exclude_sale_items', 'free_shipping' ];
 
 		$values  = [];
 		$formats = [];
-		foreach ( $allowed as $key => $fmt ) {
+		foreach ( $scalars as $key => $fmt ) {
 			if ( ! array_key_exists( $key, $data ) ) {
 				continue;
 			}
-			$values[ $key ] = $data[ $key ];
+			$values[ $key ] = in_array( $key, $booleans, true ) ? (int) (bool) $data[ $key ] : $data[ $key ];
 			$formats[]      = $fmt;
 		}
+
+		// JSON-encoded array columns. Always normalised through encode_json so
+		// "[]" / "null" / "" all collapse to NULL ("no restriction").
+		foreach ( self::JSON_FIELDS as $key ) {
+			if ( ! array_key_exists( $key, $data ) ) {
+				continue;
+			}
+			$values[ $key ] = self::encode_json( $data[ $key ] );
+			$formats[]      = '%s';
+		}
+
 		if ( ! $values ) {
 			return false;
 		}

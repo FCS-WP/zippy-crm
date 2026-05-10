@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useApiQuery } from "@/js/shared/hooks/useApi.js";
 import { HeroBalance } from "./HeroBalance.jsx";
 import { InsightsStrip } from "./InsightsStrip.jsx";
-import { RedeemForm } from "./RedeemForm.jsx";
+import { RedeemCTA } from "./RedeemCTA.jsx";
 import { LedgerTable } from "./LedgerTable.jsx";
 import { PointsSkeleton } from "./PointsSkeleton.jsx";
 
@@ -31,7 +31,7 @@ export default function PointsTab() {
 						redemptionRate={summary.data.redemption_rate}
 					/>
 				</div>
-				<RedeemForm summary={summary.data} />
+				<RedeemCTA summary={summary.data} />
 			</div>
 		</div>
 	);

@@ -37,20 +37,15 @@ export function HeroBalance({ summary, membership }) {
 						</span>
 					</div>
 					<div>
-						<p className="zc-text-xs zc-uppercase zc-tracking-wider zc-text-white/60">Available to redeem</p>
+						<p className="zc-text-xs zc-uppercase zc-tracking-wider zc-text-white/60">Your points</p>
 						<p className="zc-mt-1 zc-text-5xl zc-font-bold zc-leading-none zc-tracking-tight">
-							{number(summary.available)}
+							{number(summary.balance)}
 							<span className="zc-ml-2 zc-text-base zc-font-medium zc-text-white/70">pts</span>
 						</p>
 						<p className="zc-mt-2 zc-text-sm zc-text-white/80">
-							Worth <span className="zc-font-semibold zc-text-white">{money(summary.available_dollar_value)}</span>
+							Worth <span className="zc-font-semibold zc-text-white">{money(summary.dollar_value)}</span>
 							{" "}at checkout · {summary.redemption_rate} pts = $1
 						</p>
-						{summary.reserved > 0 && (
-							<p className="zc-mt-1 zc-text-xs zc-text-white/60">
-								{number(summary.balance)} total · {number(summary.reserved)} reserved in pending coupons
-							</p>
-						)}
 					</div>
 				</div>
 

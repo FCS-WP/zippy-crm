@@ -13,7 +13,10 @@ const LIVE_ROUTES = new Set([
 	"GET /membership/me",
 	"GET /points/me",
 	"GET /points/ledger",
-	"POST /points/redeem",
+	"POST /points/redeem",     // legacy 410 shim — still routes to live API
+	"GET /points/applicable",  // v1.8 cart-tender flow
+	"POST /points/apply",
+	"DELETE /points/apply",
 	"GET /vouchers",
 	"GET /vouchers/claims",
 	"GET /notifications/preferences",
@@ -31,6 +34,9 @@ const LIVE_ROUTES = new Set([
 	"GET /tiers",
 	"GET /admin/tiers",
 	"POST /admin/tiers",
+	"GET /admin/catalog/products",
+	"GET /admin/catalog/categories",
+	"GET /admin/catalog/customers",
 ]);
 
 // Path prefixes that should hit the real backend (for routes with `{id}` etc).

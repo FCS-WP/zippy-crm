@@ -105,8 +105,8 @@
 ### Bonus (uncovered)
 - [x] `QueryLoader` strips `--` SQL comments globally so `$wpdb->prepare()` works on commented `.sql` files
 
-### Spec compliance fix — reserve-on-click, debit-on-completion
-- [x] Schema: added `reserved_points` + `pending_status` cols + `idx_pending` index (DB v1.2.0)
+### Spec compliance fix — reserve-on-click, debit-on-completion (v1.2.0)
+- [x] Schema: added `reserved_points` + `pending_status` cols + `idx_pending` index
 - [x] New ledger type `pending_redeem` (points=0, holds reserved amount + status)
 - [x] Coupon meta: `_zc_redemption`, `_zc_points_reserved`, `_zc_user_id`
 - [x] `redeem()` now reserves only — no balance debit until coupon is used
@@ -116,7 +116,23 @@
 - [x] New error code `insufficient_available` with breakdown message
 - [x] React hero shows available as headline; reserved sub-line when non-zero
 - [x] Ledger UI renders `pending_redeem` rows with coupon chip + amber styling + status label
-- [ ] Daily cron `crm_expire_old_pendings` to flip expired pendings (deferred — SQL filter handles correctness)
+- [ ] Daily cron `crm_expire_old_pendings` (irrelevant after v1.8.0 — flow retired)
+
+### Conceptual cleanup — points as cash tender, not coupon (v1.8.0)
+- [x] Migrated points from coupon-based redemption to cart-tender model. Vouchers stay coupons; points become a negative fee on the order.
+- [x] `Services/PointsTender` — owns the WC session apply/clear, the `cart_calculate_fees` hook, the `checkout_create_order` persist, and the `order_status_completed` settle (priority 30, after award)
+- [x] REST: `GET /points/applicable`, `POST /points/apply`, `DELETE /points/apply`
+- [x] Cart-page React widget at `assets/src/js/cart/PointsTenderWidget.jsx` (separate Vite entry, conditionally enqueued only on `is_cart()` for logged-in users)
+- [x] `woocommerce_before_cart_totals` prints the mount div
+- [x] **Refund handling**: `woocommerce_order_refunded` listener credits points back proportionally to the refunded fraction (cumulative-aware via `_zc_points_refunded` meta)
+- [x] Tax behavior: post-tax (gift-card semantics) by default; `crm_points_fee_taxable` filter for jurisdiction overrides
+- [x] Idempotent settle via `_zc_points_settled` order meta — replay-safe
+- [x] One-time data migration: legacy `pending_redeem` rows flipped to `expired`; legacy unused coupons left to expire naturally
+- [x] `PointsEngine::redeem()` returns 410 `redeem_deprecated` so stale browser tabs get a clean error
+- [x] Legacy code removed: `consume_redemptions_for_order`, `generate_coupon_code`, `debit()`, the four `COUPON_META_*` + `META_REDEEMED_CODES` + `COUPON_PREFIX` constants
+- [x] `get_full_summary` collapsed: `available == balance`, `reserved == 0` (kept as fields for one-deploy backward compat with old React bundles)
+- [x] Customer Points tab: `RedeemForm` retired; replaced with `RedeemCTA` linking to the cart; hero hero shows just `balance`
+- [x] Verified end-to-end: apply → fee on cart, complete → ledger debits, refund 50% → 50 pts credit back, replay completed hook → no double-debit
 
 ---
 
@@ -236,6 +252,20 @@
 - [x] Backend: model + service + REST + 9 SQL files; HPOS-safe; first invariant locked into `Voucher::create`
 - [x] Mock layer: admin voucher routes added to `LIVE_ROUTES` / `LIVE_PREFIXES`
 - [x] Smoke-tested via `wp eval-file` (15 cases, all pass — list/create/dup/bad-payload/update/publish/draft-delete-refusal/pause/resume/duplicate/filter/search/claims/cleanup)
+
+### Vouchers — full WC-coupon parity (v1.9.0)
+- [x] **Schema migration**: 12 new columns on `crm_vouchers` (`max_order_amount`, `usage_limit_per_user`, `limit_usage_to_x_items`, `individual_use`, `exclude_sale_items`, `free_shipping`, `email_restrictions`, `product_ids`, `excluded_product_ids`, `product_categories`, `excluded_product_categories`, `allowed_hours`). Array fields stored as JSON-encoded TEXT.
+- [x] **Voucher model**: `JSON_FIELDS` const, `encode_json()` (normalises null/empty/[]→null), `decode_json_fields()` for read-time deserialization. `create()` and `update()` whitelists extended; partial update preserves untouched JSON fields.
+- [x] **VoucherService::sync_wc_coupon**: pushes every new field onto `WC_Coupon` via the appropriate setter (`set_maximum_amount` / `set_usage_limit_per_user` / `set_limit_usage_to_x_items` / `set_individual_use` / `set_exclude_sale_items` / `set_free_shipping` / `set_email_restrictions` / `set_product_ids` / `set_excluded_product_ids` / `set_product_categories` / `set_excluded_product_categories`); handles null expiry by clearing the WC date.
+- [x] **Hour-window enforcement**: new `Hooks/VoucherHourWindow` listens on `woocommerce_coupon_is_valid`, reads voucher `allowed_hours`, throws with a human-readable message ("This voucher is only valid Fri, Sat 18:00 - 21:00.") when out of window. Wrapped windows (across midnight) supported. Site timezone (`wp_timezone()`) honored.
+- [x] **REST shape**: `extract_voucher_payload` and `shape_voucher_admin` carry all 12 new fields (JSON columns deserialize to PHP arrays for the React side, encode back on submit).
+- [x] **Catalog lookup**: new `Controllers/Rest/CatalogController` + 2 admin-only routes — `GET /admin/catalog/products` and `GET /admin/catalog/categories`. Both accept `search` (string) OR `ids` (csv); ID order preserved so chip-row order matches admin's pick order.
+- [x] **VoucherForm refactor**: 4 tabs — General / Restrictions / Limits / Time window — backed by `sections/{Field, Tabs, GeneralSection, RestrictionsSection, LimitsSection, TimeSection, EmailRestrictionsField, HourWindowField, CatalogPickerField}`. Old single-page form retired.
+- [x] **CatalogPickerField**: one component, two flavours (`kind="products" | "categories"`). Trigger row shows chips + "Add"; Add opens a Drawer with a debounced search-as-you-type field; checkbox toggles selection. Empty selection = "no restriction".
+- [x] **HourWindowField**: master switch + 7-day chips + from/to hour inputs. Detects wrapped windows (00:00 crossing) and zero-day selections, surfaces both as inline notices.
+- [x] **EmailRestrictionsField**: chip input with Enter/comma to commit, Backspace-on-empty to remove last; supports literal addresses + WC wildcard syntax (`*@bigco.com`).
+- [x] Mock layer: 2 admin catalog routes added to `LIVE_ROUTES`
+- [x] Smoke-tested via `wp eval-file` (9 cases — create-with-all-fields, DB-row JSON encoding, partial update preserves siblings, publish round-trip pushes 11 setters to WC coupon, hour-window real coupon throws with correct message, catalog product/category search and bad-query 400, cleanup)
 
 ### Points
 - [x] `PointsPanel` — summary cards (issued / redeemed / outstanding / members) + outstanding-liability subtitle

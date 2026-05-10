@@ -24,6 +24,7 @@ export default defineConfig({
 			input: {
 				admin:   path.resolve(__dirname, "assets/src/js/admin/index.jsx"),
 				account: path.resolve(__dirname, "assets/src/js/account/index.jsx"),
+				cart:    path.resolve(__dirname, "assets/src/js/cart/index.jsx"),
 			},
 			output: {
 				entryFileNames: "js/[name].js",

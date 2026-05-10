@@ -1,0 +1,462 @@
+<?php
+namespace ZippyCrm\Services;
+
+use ZippyCrm\Models\PointsLedger;
+use ZippyCrm\Models\PointsSummary;
+
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Apply points as cash tender at checkout — replaces the old coupon-based
+ * redemption flow (which is now legacy and disabled in PointsEngine).
+ *
+ * Model:
+ *   - Customer slides "use N points" on the cart page → REST writes N to the
+ *     WC session under SESSION_KEY.
+ *   - On every cart total recalc, `add_fee()` reads the session and attaches a
+ *     negative WC_Order_Item_Fee. `tax_status='none'` so it reduces the
+ *     post-tax total (treat-as-cash semantics; gift-card-equivalent).
+ *   - On checkout, the session value is copied to order meta `_zc_points_applied`.
+ *   - On order completion, `settle_for_order()` debits the ledger + summary
+ *     once (gated by `_zc_points_settled` for idempotency under hook re-fire).
+ *   - On refund, `credit_back_on_refund()` returns points proportionally to
+ *     the refunded fraction.
+ *
+ * Why session, not DB:
+ *   No reservation, no 24h coupon, no pending state. The session expires
+ *   naturally (~48h default), so abandoned carts return points implicitly.
+ *   Two tabs racing to use the same points are arbitrated at order completion
+ *   — whichever order completes first gets the debit; the second order's
+ *   apply-step value is just a hint that gets validated against current
+ *   balance at settle time.
+ */
+final class PointsTender {
+
+	/**
+	 * WC session key used by the cart fee + checkout copy.
+	 *
+	 * Note: we ALSO mirror the value into user meta `_zc_applied_points` for
+	 * logged-in users. WC's session class doesn't bind the customer ID until
+	 * `init` priority 1, but REST authentication runs later, so a REST call
+	 * from a logged-in user lands on a fresh guest session every time. The
+	 * user-meta fallback survives that.
+	 */
+	public const SESSION_KEY = 'zc_applied_points';
+
+	/** User meta — primary source of truth for logged-in customers. */
+	public const USER_META_APPLIED = '_zc_applied_points';
+
+	/** Order meta key set during checkout, read at order_status_completed. */
+	public const META_APPLIED  = '_zc_points_applied';
+
+	/** Order meta marker — set after settle to make it idempotent. */
+	public const META_SETTLED  = '_zc_points_settled';
+
+	/** Order meta — points already credited back via refund (cumulative). */
+	public const META_REFUNDED = '_zc_points_refunded';
+
+	/* ============================================================
+	 * Hook registration (called from Plugin::boot via Hooks/WooCommerce)
+	 * ============================================================ */
+
+	public static function register(): void {
+		add_action( 'woocommerce_cart_calculate_fees',     [ self::class, 'add_fee' ] );
+		add_action( 'woocommerce_checkout_create_order',   [ self::class, 'persist_to_order' ], 10, 2 );
+		add_action( 'woocommerce_order_status_completed',  [ self::class, 'settle_for_order' ], 30 );
+		add_action( 'woocommerce_order_refunded',          [ self::class, 'credit_back_on_refund' ], 10, 2 );
+
+		// If the cart empties or order completes, drop the session value so a
+		// new shopping session starts clean.
+		add_action( 'woocommerce_cart_emptied',          [ self::class, 'clear_session' ] );
+		add_action( 'woocommerce_thankyou',              [ self::class, 'clear_session' ] );
+	}
+
+	/* ============================================================
+	 * Apply / clear (REST callers)
+	 * ============================================================ */
+
+	/**
+	 * Validates and stores the requested apply amount on the WC session.
+	 * Caller (REST controller) decides what to do with errors.
+	 *
+	 * Contract:
+	 *   - $points must be a non-negative multiple of the redemption rate
+	 *   - $points must be ≤ user balance
+	 *   - $points-as-dollars must be ≤ current cart total (no negative orders)
+	 *
+	 * Returns the resolved amount on success (may differ from requested if
+	 * we clamped to cart_total) or \WP_Error on failure.
+	 *
+	 * @return int|\WP_Error
+	 */
+	public static function apply( int $user_id, int $points ) {
+		$rate = (int) apply_filters( 'crm_points_redemption_rate', ZIPPY_CRM_POINTS_RATE, $user_id );
+
+		if ( $points < 0 ) {
+			return new \WP_Error( 'apply_negative', __( 'Cannot apply a negative number of points.', 'zippy-crm' ), [ 'status' => 400 ] );
+		}
+		if ( $points === 0 ) {
+			self::clear_session();
+			return 0;
+		}
+		if ( $points % $rate !== 0 ) {
+			return new \WP_Error(
+				'apply_not_multiple',
+				sprintf( /* translators: %d: rate */ __( 'Points must be a multiple of %d.', 'zippy-crm' ), $rate ),
+				[ 'status' => 400 ]
+			);
+		}
+
+		// Suspended members can't tender.
+		$membership = MembershipService::get_for_user( $user_id );
+		if ( ( $membership['status'] ?? 'active' ) !== 'active' ) {
+			return new \WP_Error( 'account_suspended', __( 'Your account is currently suspended.', 'zippy-crm' ), [ 'status' => 403 ] );
+		}
+
+		$balance = (int) PointsSummary::find( $user_id )['balance'] ?? 0;
+		if ( $points > $balance ) {
+			return new \WP_Error(
+				'insufficient_balance',
+				sprintf(
+					/* translators: 1: balance, 2: requested */
+					__( 'You only have %1$d points. Cannot apply %2$d.', 'zippy-crm' ),
+					$balance,
+					$points
+				),
+				[ 'status' => 400, 'balance' => $balance ]
+			);
+		}
+
+		// Clamp to cart total — points can never make the order go below zero.
+		// Only clamp when we can read a non-zero cart. In REST context, WC's
+		// session-bound cart often loads empty (cart_total == 0) even though
+		// the customer has items — see ensure_cart_loaded notes. In that case
+		// trust the user's request and let the fee hook re-clamp at render
+		// time, when WC()->cart is the live cart with items.
+		$cart_total = self::cart_total_for_clamp();
+		if ( $cart_total !== null && $cart_total > 0 ) {
+			$dollars = $points / $rate;
+			if ( $dollars > $cart_total ) {
+				$dollars = floor( $cart_total );
+				$points  = (int) ( $dollars * $rate );
+			}
+		}
+
+		self::write_state( $user_id, $points );
+
+		// Force WC to recalc immediately so the fee shows up without a page reload.
+		if ( function_exists( 'WC' ) && WC()->cart ) {
+			WC()->cart->calculate_totals();
+		}
+
+		return $points;
+	}
+
+	/**
+	 * Returns currently-applied points for the user, or 0.
+	 *
+	 * Reads in this order:
+	 *   1. WC session (works in same-request reads + classic page renders)
+	 *   2. User meta (the cross-REST fallback, primary for logged-in users)
+	 *
+	 * The session is the per-request preference because the cart-fee hook
+	 * runs in the page-render context where WC's cart/session are properly
+	 * bound. The user-meta read kicks in for REST endpoints where the
+	 * session is a fresh guest one.
+	 */
+	public static function get_applied( ?int $user_id = null ): int {
+		// Try the WC session first (works during page-render context).
+		if ( function_exists( 'WC' ) && WC()->session ) {
+			$from_session = (int) WC()->session->get( self::SESSION_KEY, 0 );
+			if ( $from_session > 0 ) {
+				return $from_session;
+			}
+		}
+
+		// Fallback to user meta — survives REST's session quirks.
+		$user_id = $user_id ?? get_current_user_id();
+		if ( $user_id <= 0 ) {
+			return 0;
+		}
+		return (int) get_user_meta( $user_id, self::USER_META_APPLIED, true );
+	}
+
+	/**
+	 * Clear the applied amount for a user. Wipes both the session and the
+	 * user-meta fallback so a stale meta value doesn't reapply on the next
+	 * cart render.
+	 */
+	public static function clear_session( ?int $user_id = null ): void {
+		if ( function_exists( 'WC' ) && WC()->session ) {
+			WC()->session->__unset( self::SESSION_KEY );
+		}
+		$user_id = $user_id ?? get_current_user_id();
+		if ( $user_id > 0 ) {
+			delete_user_meta( $user_id, self::USER_META_APPLIED );
+		}
+	}
+
+	/**
+	 * Persist the applied amount in both stores so reads from any context
+	 * find it. Session is the per-request hint; user meta is the durable
+	 * source for cross-REST reads.
+	 */
+	private static function write_state( int $user_id, int $points ): void {
+		if ( function_exists( 'WC' ) && WC()->session ) {
+			WC()->session->set( self::SESSION_KEY, $points );
+		}
+		if ( $user_id > 0 ) {
+			if ( $points > 0 ) {
+				update_user_meta( $user_id, self::USER_META_APPLIED, $points );
+			} else {
+				delete_user_meta( $user_id, self::USER_META_APPLIED );
+			}
+		}
+	}
+
+	/* ============================================================
+	 * Cart fee
+	 * ============================================================ */
+
+	/**
+	 * Hook target: woocommerce_cart_calculate_fees.
+	 *
+	 * Reads the session value and adds it as a negative fee. tax_status='none'
+	 * makes this a post-tax reduction (gift-card semantics). Stores that need
+	 * to treat points as a discount can filter `crm_points_fee_taxable`.
+	 */
+	public static function add_fee( $cart ): void {
+		$user_id = get_current_user_id();
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		$points = self::get_applied( $user_id );
+		if ( $points <= 0 ) {
+			return;
+		}
+
+		$rate    = (int) apply_filters( 'crm_points_redemption_rate', ZIPPY_CRM_POINTS_RATE, $user_id );
+		$dollars = $points / $rate;
+		if ( $dollars <= 0 ) {
+			return;
+		}
+
+		// Re-clamp at recalc time too: the cart may have shrunk since `apply()`.
+		$cart_total = (float) $cart->get_subtotal() + (float) $cart->get_subtotal_tax();
+		if ( $dollars > $cart_total ) {
+			$dollars = floor( $cart_total );
+		}
+
+		$taxable = (bool) apply_filters( 'crm_points_fee_taxable', false, $points, $user_id );
+
+		$cart->add_fee(
+			__( 'Points redemption', 'zippy-crm' ),
+			-1 * $dollars,
+			$taxable
+		);
+	}
+
+	/* ============================================================
+	 * Persist to order at checkout
+	 * ============================================================ */
+
+	/**
+	 * Hook target: woocommerce_checkout_create_order.
+	 *
+	 * Copies the session value onto the order so settle_for_order can find it
+	 * even if the session has expired by the time the hook runs (e.g. delayed
+	 * payment gateway).
+	 */
+	public static function persist_to_order( \WC_Order $order, $data ): void {
+		$user_id = (int) $order->get_customer_id();
+		$points  = self::get_applied( $user_id );
+		if ( $points <= 0 ) {
+			return;
+		}
+		$order->update_meta_data( self::META_APPLIED, $points );
+		// Don't save() here — WC saves the order itself after this hook.
+
+		// The order has captured the value; clear the live state so the
+		// customer's next cart starts fresh and a stale meta value can't
+		// re-attach to a future order.
+		self::clear_session( $user_id );
+	}
+
+	/* ============================================================
+	 * Settle on completion
+	 * ============================================================ */
+
+	/**
+	 * Hook target: woocommerce_order_status_completed.
+	 *
+	 * Idempotent via META_SETTLED. Re-firings of the hook (admin flips status,
+	 * payment retries) won't double-debit.
+	 *
+	 * Runs at priority 30 — after award_for_order (default 10) and tier eval,
+	 * so the multiplier on this very order isn't influenced by the points
+	 * coming off (correct: customers earn on subtotal-after-discounts, and the
+	 * points fee is post-tax so it doesn't affect subtotal at all).
+	 */
+	public static function settle_for_order( int $order_id ): void {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return;
+		}
+		$user_id = (int) $order->get_customer_id();
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		$applied = (int) $order->get_meta( self::META_APPLIED );
+		if ( $applied <= 0 ) {
+			return; // no points were tendered on this order
+		}
+		if ( $order->get_meta( self::META_SETTLED ) === '1' ) {
+			return; // already debited; replay is a no-op
+		}
+
+		// Re-validate against current balance — a race between "apply 200 in
+		// cart A" and "apply 200 in cart B" is arbitrated here. Whichever
+		// completes first gets the full debit; the second one gets clamped
+		// to whatever balance remains (or zero).
+		$balance = (int) ( PointsSummary::find( $user_id )['balance'] ?? 0 );
+		$debit   = min( $applied, $balance );
+
+		if ( $debit <= 0 ) {
+			// No balance left — leave applied=N on the order for audit but
+			// don't debit. Mark settled so we don't keep retrying.
+			$order->update_meta_data( self::META_SETTLED, '1' );
+			$order->save();
+			return;
+		}
+
+		PointsLedger::insert(
+			$user_id,
+			'redeem',
+			-1 * $debit,
+			sprintf( /* translators: %d: order id */ __( 'Order #%d (points tender)', 'zippy-crm' ), $order_id ),
+			$order_id
+		);
+		PointsSummary::apply_delta( $user_id, -1 * $debit );
+		PointsEngine::invalidate( $user_id );
+
+		$order->update_meta_data( self::META_SETTLED, '1' );
+		$order->save();
+
+		do_action( 'crm_points_redeemed', $user_id, $debit, null, $order_id );
+	}
+
+	/* ============================================================
+	 * Refund crediting
+	 * ============================================================ */
+
+	/**
+	 * Hook target: woocommerce_order_refunded.
+	 *
+	 * Returns points proportional to the refunded fraction. Tracks cumulative
+	 * refunded amount via META_REFUNDED so partial-refund-then-partial-refund
+	 * doesn't over-credit.
+	 */
+	public static function credit_back_on_refund( int $order_id, int $refund_id ): void {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return;
+		}
+		$user_id = (int) $order->get_customer_id();
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		$applied = (int) $order->get_meta( self::META_APPLIED );
+		if ( $applied <= 0 ) {
+			return;
+		}
+		if ( $order->get_meta( self::META_SETTLED ) !== '1' ) {
+			return; // never debited, nothing to refund
+		}
+
+		$order_total       = (float) $order->get_total();
+		$total_refunded    = (float) $order->get_total_refunded(); // cumulative across all refunds
+		if ( $order_total <= 0 ) {
+			return;
+		}
+
+		$refund_fraction = min( 1.0, $total_refunded / $order_total );
+		$points_to_have_back = (int) floor( $applied * $refund_fraction );
+
+		$already_refunded = (int) $order->get_meta( self::META_REFUNDED );
+		$delta            = $points_to_have_back - $already_refunded;
+		if ( $delta <= 0 ) {
+			return;
+		}
+
+		PointsLedger::insert(
+			$user_id,
+			'adjust',
+			$delta,
+			sprintf( /* translators: %d: order id */ __( 'Refund credit on order #%d', 'zippy-crm' ), $order_id ),
+			$order_id
+		);
+		PointsSummary::apply_delta( $user_id, $delta );
+		PointsEngine::invalidate( $user_id );
+
+		$order->update_meta_data( self::META_REFUNDED, (string) ( $already_refunded + $delta ) );
+		$order->save();
+
+		do_action( 'crm_points_refund_credited', $user_id, $delta, $order_id, $refund_id );
+	}
+
+	/* ============================================================
+	 * Internal
+	 * ============================================================ */
+
+	/**
+	 * Cart total for the clamp on apply(). Returns null if no cart context
+	 * (e.g. apply called outside of a request that has a cart yet).
+	 *
+	 * WC's session-stored cart doesn't auto-bootstrap during a REST request —
+	 * the cart is loaded by `wp` action on page renders, not by REST routing.
+	 * We call `wc_load_cart()` explicitly so a `GET /points/applicable` from
+	 * the cart page hydrates the same session cart the customer is looking at.
+	 *
+	 * Subtotal (line items pre-discount) + subtotal-tax — covers the cart's
+	 * value before our fee subtracts. We deliberately don't call
+	 * `$cart->get_total()` here because that would be circular (it includes
+	 * our fee). Subtotal+tax is a safe upper bound.
+	 */
+	private static function cart_total_for_clamp(): ?float {
+		if ( ! function_exists( 'WC' ) ) {
+			return null;
+		}
+		self::ensure_cart_loaded();
+		if ( ! WC()->cart ) {
+			return null;
+		}
+		return (float) WC()->cart->get_subtotal() + (float) WC()->cart->get_subtotal_tax();
+	}
+
+	/**
+	 * Bootstraps `WC()->cart` if it isn't already loaded for this request.
+	 * Required when called from a REST handler — REST doesn't fire the `wp`
+	 * action that normally hydrates the cart. Idempotent: re-runs are no-ops.
+	 *
+	 * Public so the controller can call it before reading the cart for the
+	 * tender_payload response.
+	 */
+	public static function ensure_cart_loaded(): void {
+		if ( ! function_exists( 'WC' ) ) {
+			return;
+		}
+		// If a cart instance already exists, the session is already hydrated.
+		if ( WC()->cart instanceof \WC_Cart ) {
+			return;
+		}
+		// `wc_load_cart` registers the cart and session classes for the
+		// current request and reads the persistent cart for the logged-in
+		// user. Available in WC 3.6+.
+		if ( function_exists( 'wc_load_cart' ) ) {
+			wc_load_cart();
+		}
+	}
+}

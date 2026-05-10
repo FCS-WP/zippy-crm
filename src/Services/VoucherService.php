@@ -40,10 +40,18 @@ final class VoucherService {
 	}
 
 	/**
-	 * Creates the WC coupon if it doesn't exist; updates amount/limits if it
-	 * does. Idempotent — safe to call on every publish.
+	 * Creates the WC coupon if it doesn't exist; updates every field that we
+	 * mirror onto WC's coupon model on each call. Idempotent — safe to call
+	 * on every publish or update.
+	 *
+	 * Fields NOT covered by WC native: `allowed_hours` (day-of-week + hour
+	 * window). That restriction is enforced by Hooks\VoucherHourWindow, which
+	 * walks the voucher row at validation time using the `_zc_voucher_id`
+	 * meta we write here.
 	 */
 	public static function sync_wc_coupon( array $voucher ): int {
+		$voucher = Voucher::decode_json_fields( $voucher );
+
 		$code      = (string) $voucher['code'];
 		$coupon_id = wc_get_coupon_id_by_code( $code );
 
@@ -51,18 +59,38 @@ final class VoucherService {
 		$coupon->set_code( $code );
 		$coupon->set_discount_type( (string) $voucher['discount_type'] );
 		$coupon->set_amount( (string) $voucher['discount_value'] );
-		$coupon->set_minimum_amount( (string) $voucher['min_order_amount'] );
-		$coupon->set_individual_use( true );
+		$coupon->set_description( (string) ( $voucher['description'] ?? $voucher['title'] ) );
 
-		if ( (int) $voucher['max_uses'] > 0 ) {
-			$coupon->set_usage_limit( (int) $voucher['max_uses'] );
-		}
+		// Spend bounds
+		$coupon->set_minimum_amount( (string) ( $voucher['min_order_amount'] ?? 0 ) );
+		$coupon->set_maximum_amount( (string) ( $voucher['max_order_amount'] ?? 0 ) );
+
+		// Behavior toggles
+		$coupon->set_individual_use(     (bool) ( $voucher['individual_use']     ?? true ) );
+		$coupon->set_exclude_sale_items( (bool) ( $voucher['exclude_sale_items'] ?? false ) );
+		$coupon->set_free_shipping(      (bool) ( $voucher['free_shipping']      ?? false ) );
+
+		// Usage limits — `set_*` accept 0 / null for "unlimited" too
+		$coupon->set_usage_limit(           (int) ( $voucher['max_uses']               ?? 0 ) );
+		$coupon->set_usage_limit_per_user(  (int) ( $voucher['usage_limit_per_user']   ?? 0 ) );
+		$coupon->set_limit_usage_to_x_items((int) ( $voucher['limit_usage_to_x_items'] ?? 0 ) );
+
+		// Allow / block lists. WC expects arrays; nulls become empty arrays.
+		// Email restrictions: our column may store rich objects ({email, first_name,
+		// last_name}) so admins can see chips with names. WC only cares about
+		// emails — flatten before handing it over.
+		$coupon->set_email_restrictions(          self::email_restrictions_for_wc( $voucher['email_restrictions'] ?? [] ) );
+		$coupon->set_product_ids(                 (array) ( $voucher['product_ids']                 ?? [] ) );
+		$coupon->set_excluded_product_ids(        (array) ( $voucher['excluded_product_ids']        ?? [] ) );
+		$coupon->set_product_categories(          (array) ( $voucher['product_categories']          ?? [] ) );
+		$coupon->set_excluded_product_categories( (array) ( $voucher['excluded_product_categories'] ?? [] ) );
 
 		if ( ! empty( $voucher['expires_at'] ) ) {
 			$coupon->set_date_expires( strtotime( $voucher['expires_at'] . ' UTC' ) );
+		} else {
+			$coupon->set_date_expires( null );
 		}
 
-		$coupon->set_description( (string) ( $voucher['description'] ?? $voucher['title'] ) );
 		$coupon->update_meta_data( self::COUPON_META_VOUCHER_ID, (int) $voucher['id'] );
 
 		return (int) $coupon->save();
@@ -298,5 +326,34 @@ final class VoucherService {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Flatten our `email_restrictions` column into the plain email string
+	 * array WC's `set_email_restrictions()` expects.
+	 *
+	 * Accepts both the legacy shape (array of strings) and the v1.10 shape
+	 * (array of objects: { email, first_name?, last_name? }) so vouchers
+	 * created before the customer-picker UI keep syncing correctly.
+	 *
+	 * Filters out empty / non-email entries; lower-cases everything (WC
+	 * compares case-insensitively but admins might enter mixed case).
+	 *
+	 * @param mixed $entries
+	 * @return array<int,string>
+	 */
+	private static function email_restrictions_for_wc( $entries ): array {
+		if ( ! is_array( $entries ) ) {
+			return [];
+		}
+		$out = [];
+		foreach ( $entries as $entry ) {
+			$email = is_array( $entry ) ? (string) ( $entry['email'] ?? '' ) : (string) $entry;
+			$email = strtolower( trim( $email ) );
+			if ( $email !== '' && strpos( $email, '@' ) !== false ) {
+				$out[] = $email;
+			}
+		}
+		return array_values( array_unique( $out ) );
 	}
 }

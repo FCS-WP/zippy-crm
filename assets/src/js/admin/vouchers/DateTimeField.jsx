@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { DayPicker } from "react-day-picker";
 import "react-day-picker/style.css";
 import "../reports/day-picker-overrides.css";
+import { TimeField } from "./sections/TimeField.jsx";
 
 /**
  * Single-date + time input. Trigger button shows the current value and opens
@@ -140,13 +141,13 @@ export function DateTimeField({ value, onChange, placeholder = "Pick a date" }) 
 							/>
 						</div>
 						<div className="zc-flex zc-items-center zc-gap-2 zc-border-t zc-border-zinc-200 zc-px-3 zc-py-2">
-							<label className="zc-text-[11px] zc-text-zinc-500">Time</label>
-							<input
-								type="time"
-								value={draftTime}
-								onChange={(e) => setDraftTime(e.target.value)}
-								className="zc-h-7 zc-flex-1 zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-px-2 zc-text-xs zc-text-zinc-900 focus:zc-border-zinc-500 focus:zc-ring-1 focus:zc-ring-zinc-200"
-							/>
+							<span className="zc-text-[11px] zc-text-zinc-500">Time</span>
+							<div className="zc-flex-1">
+								<TimeField
+									value={draftTime}
+									onChange={setDraftTime}
+								/>
+							</div>
 						</div>
 						<div className="zc-flex zc-items-center zc-justify-end zc-gap-1 zc-border-t zc-border-zinc-200 zc-bg-zinc-50 zc-px-3 zc-py-1.5">
 							<button

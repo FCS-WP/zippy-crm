@@ -1,29 +1,44 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useApiMutation } from "@/js/shared/hooks/useApi.js";
 import { Button } from "@/js/shared/ui/button.jsx";
-import { Input } from "@/js/shared/ui/input.jsx";
-import { DateTimeField } from "./DateTimeField.jsx";
+import { GeneralSection }      from "./sections/GeneralSection.jsx";
+import { LimitsSection }       from "./sections/LimitsSection.jsx";
+import { RestrictionsSection } from "./sections/RestrictionsSection.jsx";
+import { Tabs }                from "./sections/Tabs.jsx";
+import { TimeSection }         from "./sections/TimeSection.jsx";
 
 const EMPTY = {
+	// general
 	code: "",
 	title: "",
 	description: "",
 	discount_type: "percent",
 	discount_value: "",
+	free_shipping: false,
+	// restrictions
 	min_order_amount: "",
+	max_order_amount: "",
+	individual_use: true,
+	exclude_sale_items: false,
+	product_ids: [],
+	excluded_product_ids: [],
+	product_categories: [],
+	excluded_product_categories: [],
+	email_restrictions: [],
+	// limits
 	max_uses: "",
+	usage_limit_per_user: "",
+	limit_usage_to_x_items: "",
+	// time
 	starts_at: null,
 	expires_at: null,
+	allowed_hours: null,
 };
 
 /**
  * Random voucher code: 4-letter readable prefix + 4 alphanumerics. Matches
- * the server-side regex (^[A-Z0-9_-]{3,50}$). 36^4 ≈ 1.7M suffix combos,
- * so collisions are rare; the server still rejects duplicates with 409 if
- * one slips through.
- *
- * Skips visually-confusing chars (I, O, 0, 1) so codes are easier to read
- * out loud or copy by hand.
+ * the server-side regex (^[A-Z0-9_-]{3,50}$). Skips visually-confusing chars
+ * (I, O, 0, 1) so codes are easier to read or copy by hand.
  */
 function generateCode() {
 	const ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -53,39 +68,97 @@ function fromRow(row) {
 		description: row.description ?? "",
 		discount_type: row.discount_type ?? "percent",
 		discount_value: row.discount_value ?? "",
+		free_shipping: Boolean(row.free_shipping),
+
 		min_order_amount: row.min_order_amount ?? "",
-		max_uses: row.max_uses ?? "",
-		starts_at: isoToMysql(row.starts_at),
+		max_order_amount: row.max_order_amount ?? "",
+		individual_use: row.individual_use !== undefined ? Boolean(row.individual_use) : true,
+		exclude_sale_items: Boolean(row.exclude_sale_items),
+		product_ids:                 Array.isArray(row.product_ids)                 ? row.product_ids                 : [],
+		excluded_product_ids:        Array.isArray(row.excluded_product_ids)        ? row.excluded_product_ids        : [],
+		product_categories:          Array.isArray(row.product_categories)          ? row.product_categories          : [],
+		excluded_product_categories: Array.isArray(row.excluded_product_categories) ? row.excluded_product_categories : [],
+		email_restrictions:          Array.isArray(row.email_restrictions)          ? row.email_restrictions          : [],
+
+		max_uses:               row.max_uses               ?? "",
+		usage_limit_per_user:   row.usage_limit_per_user   ?? "",
+		limit_usage_to_x_items: row.limit_usage_to_x_items ?? "",
+
+		starts_at:  isoToMysql(row.starts_at),
 		expires_at: isoToMysql(row.expires_at),
+		allowed_hours: row.allowed_hours ?? null,
 	};
+}
+
+const TABS = [
+	{ key: "general",      label: "General"      },
+	{ key: "restrictions", label: "Restrictions" },
+	{ key: "limits",       label: "Limits"       },
+	{ key: "time",         label: "Time window"  },
+];
+
+/**
+ * Count required fields that are blank. Mirrors the server-side validator
+ * (VoucherService::validate_payload). Used to badge the General tab so the
+ * admin sees from any tab how many required fields still need filling.
+ *
+ * On edit, code is locked so it doesn't count toward the missing total.
+ */
+function countMissingRequired(form, isEdit) {
+	let n = 0;
+	if (!isEdit && !form.code?.trim())  n++;
+	if (!form.title?.trim())            n++;
+	if (!form.discount_type)            n++;
+	const dv = form.discount_value;
+	if (dv === "" || dv === null || dv === undefined) n++;
+	return n;
 }
 
 export function VoucherForm({ row, onClose }) {
 	const isEdit = Boolean(row?.id);
-	const [form, setForm] = useState(fromRow(row));
+	const [form, setForm]   = useState(fromRow(row));
 	const [error, setError] = useState(null);
+	const [tab, setTab]     = useState("general");
 
-	useEffect(() => { setForm(fromRow(row)); setError(null); }, [row]);
+	useEffect(() => { setForm(fromRow(row)); setError(null); setTab("general"); }, [row]);
 
-	const create = useApiMutation("post", "/admin/vouchers", { invalidate: ["/admin/vouchers"] });
+	const create = useApiMutation("post", "/admin/vouchers",            { invalidate: ["/admin/vouchers"] });
 	const update = useApiMutation("put",  `/admin/vouchers/${row?.id}`, { invalidate: ["/admin/vouchers"] });
 	const mutation = isEdit ? update : create;
 
 	const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+	const missingRequired = useMemo(() => countMissingRequired(form, isEdit), [form, isEdit]);
 
 	const onSubmit = (e) => {
 		e.preventDefault();
 		setError(null);
 
 		const payload = {
-			title: form.title.trim(),
-			description: form.description.trim(),
-			discount_type: form.discount_type,
+			// general
+			title:          form.title.trim(),
+			description:    form.description.trim(),
+			discount_type:  form.discount_type,
 			discount_value: Number(form.discount_value) || 0,
-			min_order_amount: Number(form.min_order_amount) || 0,
-			max_uses: Number(form.max_uses) || 0,
-			starts_at: form.starts_at,
-			expires_at: form.expires_at,
+			free_shipping:  !!form.free_shipping,
+			// restrictions
+			min_order_amount:   Number(form.min_order_amount) || 0,
+			max_order_amount:   Number(form.max_order_amount) || 0,
+			individual_use:     !!form.individual_use,
+			exclude_sale_items: !!form.exclude_sale_items,
+			product_ids:                 form.product_ids,
+			excluded_product_ids:        form.excluded_product_ids,
+			product_categories:          form.product_categories,
+			excluded_product_categories: form.excluded_product_categories,
+			email_restrictions:          form.email_restrictions,
+			// limits
+			max_uses:               Number(form.max_uses)               || 0,
+			usage_limit_per_user:   Number(form.usage_limit_per_user)   || 0,
+			limit_usage_to_x_items: Number(form.limit_usage_to_x_items) || 0,
+			// time
+			starts_at:     form.starts_at,
+			expires_at:    form.expires_at,
+			allowed_hours: form.allowed_hours,
 		};
 		if (!isEdit) {
 			payload.code = form.code.trim().toUpperCase();
@@ -105,93 +178,21 @@ export function VoucherForm({ row, onClose }) {
 				</div>
 			) : null}
 
-			<Field label="Code" hint={isEdit ? "Locked once created — code is wired to the WC coupon." : "3-50 chars: A-Z 0-9 _ -"}>
-				<div className="zc-flex zc-gap-2">
-					<Input
-						value={form.code}
-						onChange={set("code")}
-						placeholder="SUMMER25"
-						required
-						disabled={isEdit}
-					/>
-					{!isEdit ? (
-						<button
-							type="button"
-							onClick={() => setForm((f) => ({ ...f, code: generateCode() }))}
-							className="zc-inline-flex zc-h-10 zc-shrink-0 zc-items-center zc-gap-1.5 zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-px-3 zc-text-sm zc-font-medium zc-text-zinc-700 hover:zc-bg-zinc-50"
-							title="Generate random code"
-						>
-							<svg viewBox="0 0 24 24" className="zc-size-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-								<path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 1 1-3-6.7" />
-								<path strokeLinecap="round" strokeLinejoin="round" d="M21 4v5h-5" />
-							</svg>
-							Generate
-						</button>
-					) : null}
-				</div>
-			</Field>
+			<Tabs
+				tabs={TABS.map((t) =>
+					t.key === "general" && missingRequired > 0
+						? { ...t, count: missingRequired, tone: "danger" }
+						: t,
+				)}
+				value={tab}
+				onChange={setTab}
+			/>
 
-			<Field label="Title">
-				<Input value={form.title} onChange={set("title")} placeholder="Summer Sale 25% Off" required />
-			</Field>
-
-			<Field label="Description">
-				<textarea
-					className="zc-w-full zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-px-3 zc-py-2 zc-text-sm zc-text-zinc-900 focus:zc-border-zinc-500 focus:zc-ring-2 focus:zc-ring-zinc-200"
-					rows={2}
-					value={form.description}
-					onChange={set("description")}
-					placeholder="Optional — shown on the voucher card."
-				/>
-			</Field>
-
-			<div className="zc-grid zc-grid-cols-2 zc-gap-4">
-				<Field label="Discount type">
-					<select
-						className="zc-h-10 zc-w-full zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-px-3 zc-text-sm focus:zc-border-zinc-500 focus:zc-ring-2 focus:zc-ring-zinc-200"
-						value={form.discount_type}
-						onChange={set("discount_type")}
-					>
-						<option value="percent">Percent off</option>
-						<option value="fixed_cart">Fixed cart amount</option>
-					</select>
-				</Field>
-				<Field label={form.discount_type === "percent" ? "Discount (%)" : "Discount ($)"}>
-					<Input
-						type="number"
-						step="0.01"
-						min="0"
-						value={form.discount_value}
-						onChange={set("discount_value")}
-						required
-					/>
-				</Field>
-			</div>
-
-			<div className="zc-grid zc-grid-cols-2 zc-gap-4">
-				<Field label="Min order ($)" hint="0 = no minimum">
-					<Input type="number" step="0.01" min="0" value={form.min_order_amount} onChange={set("min_order_amount")} />
-				</Field>
-				<Field label="Max uses" hint="0 = unlimited">
-					<Input type="number" step="1" min="0" value={form.max_uses} onChange={set("max_uses")} />
-				</Field>
-			</div>
-
-			<div className="zc-grid zc-grid-cols-2 zc-gap-4">
-				<Field label="Starts at">
-					<DateTimeField
-						value={form.starts_at}
-						onChange={(v) => setForm((f) => ({ ...f, starts_at: v }))}
-						placeholder="Optional — start date"
-					/>
-				</Field>
-				<Field label="Expires at">
-					<DateTimeField
-						value={form.expires_at}
-						onChange={(v) => setForm((f) => ({ ...f, expires_at: v }))}
-						placeholder="Optional — expiry date"
-					/>
-				</Field>
+			<div role="tabpanel">
+				{tab === "general"      ? <GeneralSection      form={form} set={set} setForm={setForm} isEdit={isEdit} generateCode={generateCode} /> : null}
+				{tab === "restrictions" ? <RestrictionsSection form={form} set={set} setForm={setForm} /> : null}
+				{tab === "limits"       ? <LimitsSection       form={form} set={set} /> : null}
+				{tab === "time"         ? <TimeSection         form={form} setForm={setForm} /> : null}
 			</div>
 
 			<div className="zc-flex zc-justify-end zc-gap-2 zc-border-t zc-border-zinc-200 zc-pt-4">
@@ -203,15 +204,5 @@ export function VoucherForm({ row, onClose }) {
 				</Button>
 			</div>
 		</form>
-	);
-}
-
-function Field({ label, hint, children }) {
-	return (
-		<label className="zc-block zc-space-y-1">
-			<span className="zc-text-sm zc-font-medium zc-text-zinc-800">{label}</span>
-			{children}
-			{hint ? <span className="zc-block zc-text-xs zc-text-zinc-500">{hint}</span> : null}
-		</label>
 	);
 }
