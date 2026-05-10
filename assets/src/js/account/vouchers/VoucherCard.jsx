@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/js/shared/ui/card.js
 import { Badge } from "@/js/shared/ui/badge.jsx";
 import { Button } from "@/js/shared/ui/button.jsx";
 import { useApiMutation } from "@/js/shared/hooks/useApi.js";
-import { date, money } from "@/js/shared/utils/format.js";
+import { date, isItemLevelType, isPercentType, money } from "@/js/shared/utils/format.js";
 
 /**
  * One voucher in the Available grid. Claim mutation invalidates both
@@ -73,10 +73,12 @@ export function VoucherCard({ voucher }) {
 }
 
 function DiscountStripe({ voucher }) {
-	const isPercent = voucher.discount_type === "percent";
+	const isPercent = isPercentType(voucher.discount_type);
+	const isItemLevel = isItemLevelType(voucher.discount_type);
 	const headline = isPercent
 		? `${Math.round(voucher.discount_value)}%`
 		: money(voucher.discount_value);
+	const suffix = isItemLevel ? "off each item" : (isPercent ? "off" : "off cart");
 
 	return (
 		<div className={[
@@ -88,7 +90,7 @@ function DiscountStripe({ voucher }) {
 		].join(" ")}>
 			<span className="zc-text-3xl zc-font-bold zc-leading-none">{headline}</span>
 			<span className="zc-text-xs zc-uppercase zc-tracking-wider zc-text-white/80">
-				{isPercent ? "off" : "off cart"}
+				{suffix}
 			</span>
 		</div>
 	);

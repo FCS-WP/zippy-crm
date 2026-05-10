@@ -13,7 +13,12 @@ defined( 'ABSPATH' ) || exit;
  *   2. Cache invalidation is always paired with the summary write.
  *   3. Reads always come from the summary (cached), never SUM(ledger).
  *
- * Earn formula:   points_earned = floor(order_subtotal_after_discounts) * multiplier
+ * Earn formula:   points_earned = floor(SUM(non_blacklisted_line_totals)) * tier_rate
+ *                  Lines whose product (or any of its categories) is in the
+ *                  PointsSettings blacklist are excluded from the sum. The
+ *                  per-tier rate (crm_tiers.multiplier) doubles as the points
+ *                  per $1 — defaults to 0 for new tiers (no earn until admin
+ *                  opts in).
  * Redeem formula: dollars       = floor(points / ZIPPY_CRM_POINTS_RATE)
  */
 final class PointsEngine {
@@ -113,17 +118,30 @@ final class PointsEngine {
 			return 0;
 		}
 
-		// Subtotal AFTER discounts. WC's `get_total()` includes shipping/tax —
-		// so we use subtotal - discount instead.
-		$subtotal_after = (float) $order->get_subtotal() - (float) $order->get_total_discount();
-		if ( $subtotal_after <= 0 ) {
+		// Earn base = sum of line totals (post-discount, pre-tax/shipping) —
+		// MINUS lines whose product is on the points blacklist (PointsSettings).
+		// Equivalent to `get_subtotal() - get_total_discount()` when no
+		// exclusions are configured, because WC discounts are allocated per
+		// line. v1.12.0: blacklist support.
+		$earn_base = 0.0;
+		foreach ( $order->get_items() as $item ) {
+			if ( ! $item instanceof \WC_Order_Item_Product ) {
+				continue;
+			}
+			$product_id = (int) $item->get_product_id();
+			if ( PointsSettings::is_product_excluded( $product_id ) ) {
+				continue;
+			}
+			$earn_base += (float) $item->get_total(); // post-discount line subtotal
+		}
+		if ( $earn_base <= 0 ) {
 			return 0;
 		}
 
 		$multiplier = MembershipService::get_multiplier( $user_id );
 		$multiplier = (float) apply_filters( 'crm_points_earn_multiplier', $multiplier, $user_id, $order );
 
-		$points = (int) floor( floor( $subtotal_after ) * $multiplier );
+		$points = (int) floor( floor( $earn_base ) * $multiplier );
 		if ( $points <= 0 ) {
 			return 0;
 		}

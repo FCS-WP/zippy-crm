@@ -1,38 +1,35 @@
 import { useMemo, useState } from "react";
 import { useApiQuery } from "@/js/shared/hooks/useApi.js";
-import { Button } from "@/js/shared/ui/button.jsx";
-import { EmptyState } from "@/js/shared/components/EmptyState.jsx";
+import { FilterChips } from "@/js/shared/components/FilterChips.jsx";
+import { Pagination } from "@/js/shared/components/Pagination.jsx";
 import { LedgerTable } from "./LedgerTable.jsx";
 import { PointsSkeleton } from "./PointsSkeleton.jsx";
 import { RecalculateButton } from "./RecalculateButton.jsx";
 import { SystemSummary } from "./SystemSummary.jsx";
 
-const PER_PAGE = 20;
-
 const TYPES = [
-	{ key: "",       label: "All types"   },
-	{ key: "earn",   label: "Earn"        },
-	{ key: "redeem", label: "Redeem"      },
-	{ key: "expire", label: "Expire"      },
-	{ key: "adjust", label: "Adjust"      },
+	{ key: "",       label: "All types" },
+	{ key: "earn",   label: "Earn"      },
+	{ key: "redeem", label: "Redeem"    },
+	{ key: "expire", label: "Expire"    },
+	{ key: "adjust", label: "Adjust"    },
 ];
+const TYPE_LABELS = Object.fromEntries(TYPES.map((t) => [t.key, t.label]));
 
 export default function PointsPanel() {
-	const [type, setType] = useState("");
-	const [page, setPage] = useState(1);
+	const [type, setType]       = useState("");
+	const [page, setPage]       = useState(1);
+	const [perPage, setPerPage] = useState(20);
 
 	const summary = useApiQuery("/admin/points/summary");
-	const params  = useMemo(() => ({ type, page, per_page: PER_PAGE }), [type, page]);
+	const params  = useMemo(() => ({ type, page, per_page: perPage }), [type, page, perPage]);
 	const ledger  = useApiQuery("/admin/points/ledger", { params });
 
-	const items   = ledger.data?.items ?? [];
-	const total   = ledger.data?.total ?? 0;
-	const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-
-	const isLoading = summary.isLoading || ledger.isLoading;
+	const items = ledger.data?.items ?? [];
+	const total = ledger.data?.total ?? 0;
 
 	return (
-		<div className="zc-space-y-5 zc-p-6">
+		<div className="zc-space-y-4 zc-p-6">
 			<header className="zc-flex zc-flex-wrap zc-items-start zc-justify-between zc-gap-3">
 				<div>
 					<h1 className="zc-text-2xl zc-font-semibold zc-text-zinc-900">Points</h1>
@@ -43,34 +40,35 @@ export default function PointsPanel() {
 				<RecalculateButton memberCount={summary.data?.members ?? 0} />
 			</header>
 
-			{isLoading ? (
+			{summary.isLoading ? (
 				<PointsSkeleton />
 			) : (
 				<>
 					<SystemSummary data={summary.data} />
 
-					<div className="zc-flex zc-flex-wrap zc-items-center zc-justify-between zc-gap-3">
+					<div className="zc-flex zc-flex-wrap zc-items-center zc-gap-2">
 						<TypeSelect value={type} onChange={(v) => { setType(v); setPage(1); }} />
-						<p className="zc-text-xs zc-text-zinc-500">
-							Showing {items.length} of {total} ledger row{total === 1 ? "" : "s"}
-						</p>
 					</div>
 
-					{ledger.error ? (
-						<div className="zc-rounded-lg zc-border zc-border-rose-200 zc-bg-rose-50 zc-p-4 zc-text-sm zc-text-rose-800">
-							{ledger.error.message || "Could not load ledger."}
-						</div>
-					) : items.length === 0 ? (
-						<EmptyState
-							title={type ? "No ledger rows match this type." : "No ledger activity yet."}
-							description={type ? "Switch to All types to see everything." : "Activity will appear here as customers earn, redeem, or get manual adjustments."}
-						/>
-					) : (
-						<>
-							<LedgerTable rows={items} />
-							<Pagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
-						</>
-					)}
+					<FilterChips
+						filters={[
+							{ key: "type", label: "Type", value: type, valueLabel: TYPE_LABELS[type] ?? type, onClear: () => { setType(""); setPage(1); } },
+						]}
+						onClearAll={() => { setType(""); setPage(1); }}
+					/>
+
+					<LedgerTable
+						rows={items}
+						loading={ledger.isLoading}
+						error={ledger.error?.message}
+					/>
+					<Pagination
+						page={page}
+						perPage={perPage}
+						total={total}
+						onPage={setPage}
+						onPerPage={(n) => { setPerPage(n); setPage(1); }}
+					/>
 				</>
 			)}
 		</div>
@@ -85,7 +83,7 @@ function TypeSelect({ value, onChange }) {
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				style={{ WebkitAppearance: "none", MozAppearance: "none", appearance: "none", backgroundImage: "none" }}
-				className="zc-h-10 zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-pl-3 zc-pr-9 zc-text-sm zc-text-zinc-900 focus:zc-border-zinc-500 focus:zc-ring-2 focus:zc-ring-zinc-200"
+				className="zc-h-9 zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-pl-3 zc-pr-9 zc-text-sm zc-text-zinc-900 focus:zc-border-zinc-500 focus:zc-ring-2 focus:zc-ring-zinc-200"
 			>
 				{TYPES.map((t) => (
 					<option key={t.key || "all"} value={t.key}>{t.label}</option>
@@ -98,23 +96,6 @@ function TypeSelect({ value, onChange }) {
 			>
 				<path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
 			</svg>
-		</div>
-	);
-}
-
-function Pagination({ page, totalPages, total, onPage }) {
-	if (totalPages <= 1) return null;
-	return (
-		<div className="zc-flex zc-items-center zc-justify-between zc-text-sm zc-text-zinc-600">
-			<span>{total} total · page {page} of {totalPages}</span>
-			<div className="zc-flex zc-gap-2">
-				<Button size="sm" variant="outline" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-					Previous
-				</Button>
-				<Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => onPage(page + 1)}>
-					Next
-				</Button>
-			</div>
 		</div>
 	);
 }

@@ -10,9 +10,10 @@
 SELECT id, code, title, description,
        discount_type, discount_value, min_order_amount,
        max_uses, uses_count, status,
+       distribution_mode, audience_mode,
        starts_at, expires_at, created_by, created_at
 FROM   {prefix}crm_vouchers
 WHERE  ( %s = '__all__' OR status = %s )
   AND  ( %s = '__all__' OR ( code LIKE %s OR title LIKE %s ) )
-ORDER  BY id DESC
+ORDER  BY {order_by}
 LIMIT  %d OFFSET %d

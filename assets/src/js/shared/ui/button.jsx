@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import { cn } from "../cn.js";
 
 const variants = {
@@ -13,18 +14,26 @@ const sizes = {
 	lg: "zc-h-11 zc-px-6 zc-text-base",
 };
 
-export function Button({
-	variant = "primary",
-	size = "md",
-	className,
-	type = "button",
-	disabled = false,
-	loading = false,
-	children,
-	...props
-}) {
+/**
+ * forwardRef so callers (e.g. ConfirmDialog auto-focusing the confirm
+ * button) can attach a ref to the underlying <button> element.
+ */
+export const Button = forwardRef(function Button(
+	{
+		variant = "primary",
+		size = "md",
+		className,
+		type = "button",
+		disabled = false,
+		loading = false,
+		children,
+		...props
+	},
+	ref,
+) {
 	return (
 		<button
+			ref={ref}
 			type={type}
 			disabled={disabled || loading}
 			className={cn(
@@ -39,7 +48,7 @@ export function Button({
 			{children}
 		</button>
 	);
-}
+});
 
 function Spinner() {
 	return (

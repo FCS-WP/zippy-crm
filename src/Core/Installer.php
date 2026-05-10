@@ -19,6 +19,7 @@ final class Installer {
 		'crm_points_ledger.sql',
 		'crm_points_summary.sql',
 		'crm_vouchers.sql',
+		'crm_voucher_codes.sql',
 		'crm_voucher_claims.sql',
 		'crm_notif_subs.sql',
 		'crm_notification_log.sql',

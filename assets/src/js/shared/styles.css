@@ -12,3 +12,21 @@
 	width: 100%;
 	min-width: 0;
 }
+
+/*
+ * Admin font — scoped to the React mounts inside the WP admin so we don't
+ * affect WP's own chrome (top bar, sidebar, notices). Inter ships with the
+ * admin bundle (see admin/index.jsx); the font-feature-settings turn on
+ * tabular numerals (better-aligned points/$ amounts in tables) and contextual
+ * alternates (proper open-cv stylistic set so "g/a/l" read more cleanly).
+ *
+ * Variable order: explicit Inter, then a system fallback so the page stays
+ * readable in the moment between WP rendering the page and our font's woff2
+ * landing.
+ */
+[id^="zippy-crm-admin-"] {
+	font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	font-feature-settings: "cv11", "ss01", "tnum";
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}

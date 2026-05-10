@@ -59,12 +59,15 @@ final class MembershipController {
 	 * ============================================================ */
 
 	public static function admin_list( \WP_REST_Request $request ) {
-		$level    = (string) $request->get_param( 'level' );
-		$status   = (string) $request->get_param( 'status' );
-		$search   = trim( (string) $request->get_param( 'search' ) );
-		$page     = max( 1, (int) $request->get_param( 'page' ) ?: 1 );
-		$per_page = (int) $request->get_param( 'per_page' ) ?: self::DEFAULT_PER_PAGE;
-		$per_page = max( 1, min( self::MAX_PER_PAGE, $per_page ) );
+		$level     = (string) $request->get_param( 'level' );
+		$status    = (string) $request->get_param( 'status' );
+		$search    = trim( (string) $request->get_param( 'search' ) );
+		$page      = max( 1, (int) $request->get_param( 'page' ) ?: 1 );
+		$per_page  = (int) $request->get_param( 'per_page' ) ?: self::DEFAULT_PER_PAGE;
+		$per_page  = max( 1, min( self::MAX_PER_PAGE, $per_page ) );
+		$sort      = (string) $request->get_param( 'sort' );
+		$direction = strtolower( (string) $request->get_param( 'direction' ) );
+		if ( $direction !== 'asc' && $direction !== 'desc' ) $direction = 'desc';
 
 		if ( $level !== '' && ! TierRegistry::exists( $level ) ) {
 			return RestResponse::error( 'bad_level_filter', __( 'Unknown level filter.', 'zippy-crm' ), 400 );
@@ -73,15 +76,17 @@ final class MembershipController {
 			return RestResponse::error( 'bad_status_filter', __( 'Unknown status filter.', 'zippy-crm' ), 400 );
 		}
 
-		$rows  = Membership::list_for_admin( $level, $status, $search, $page, $per_page );
+		$rows  = Membership::list_for_admin( $level, $status, $search, $page, $per_page, $sort, $direction );
 		$total = Membership::count_for_admin( $level, $status, $search );
 
 		return RestResponse::ok( [
-			'items'    => array_map( [ self::class, 'shape_member_row' ], $rows ),
-			'total'    => $total,
-			'page'     => $page,
-			'per_page' => $per_page,
-			'counts'   => Membership::count_by_level(),
+			'items'     => array_map( [ self::class, 'shape_member_row' ], $rows ),
+			'total'     => $total,
+			'page'      => $page,
+			'per_page'  => $per_page,
+			'sort'      => $sort,
+			'direction' => $direction,
+			'counts'    => Membership::count_by_level(),
 		] );
 	}
 

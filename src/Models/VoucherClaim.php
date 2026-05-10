@@ -26,8 +26,12 @@ final class VoucherClaim {
 	/**
 	 * Insert a claim. Returns the new id, 0 on UNIQUE collision (already
 	 * claimed), -1 on any other failure.
+	 *
+	 * `code_id` (v1.10.0+) links the claim to a specific row in
+	 * crm_voucher_codes for multi-code campaigns. NULL for single-code
+	 * vouchers (their code is the parent voucher.code).
 	 */
-	public static function claim( int $voucher_id, int $user_id ): int {
+	public static function claim( int $voucher_id, int $user_id, ?int $code_id = null ): int {
 		global $wpdb;
 		$wpdb->suppress_errors( true );
 		$ok = $wpdb->insert(
@@ -35,10 +39,11 @@ final class VoucherClaim {
 			[
 				'voucher_id' => $voucher_id,
 				'user_id'    => $user_id,
+				'code_id'    => $code_id,
 				'status'     => 'claimed',
 				'claimed_at' => DateTimeHelper::now_mysql(),
 			],
-			[ '%d', '%d', '%s', '%s' ]
+			[ '%d', '%d', '%d', '%s', '%s' ]
 		);
 		$err = $wpdb->last_error;
 		$wpdb->suppress_errors( false );

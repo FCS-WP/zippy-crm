@@ -37,6 +37,10 @@ const LIVE_ROUTES = new Set([
 	"GET /admin/catalog/products",
 	"GET /admin/catalog/categories",
 	"GET /admin/catalog/customers",
+	"GET /admin/audit",
+	"GET /admin/users",
+	"GET /admin/settings/points",
+	"PUT /admin/settings/points",
 ]);
 
 // Path prefixes that should hit the real backend (for routes with `{id}` etc).

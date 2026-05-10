@@ -3,6 +3,7 @@ namespace ZippyCrm\Services;
 
 use ZippyCrm\Models\Voucher;
 use ZippyCrm\Models\VoucherClaim;
+use ZippyCrm\Models\VoucherCode;
 use ZippyCrm\Support\Cache;
 use ZippyCrm\Support\DateTimeHelper;
 
@@ -40,8 +41,18 @@ final class ClaimHandler {
 			return self::error( 'voucher_inactive', 'Voucher is not active yet.' );
 		}
 
-		if ( (int) $voucher['max_uses'] > 0 && (int) $voucher['uses_count'] >= (int) $voucher['max_uses'] ) {
-			return self::error( 'quota_exceeded', 'No remaining uses.' );
+		// Quota check is mode-dependent:
+		//   single-code → uses_count vs max_uses
+		//   multi-code  → at least one row in crm_voucher_codes is 'available'
+		$mode = (string) ( $voucher['distribution_mode'] ?? VoucherService::MODE_SINGLE );
+		if ( $mode === VoucherService::MODE_MULTI_PUBLIC ) {
+			if ( VoucherCode::available_count_for_voucher( (int) $voucher['id'] ) <= 0 ) {
+				return self::error( 'quota_exceeded', 'No remaining codes.' );
+			}
+		} else {
+			if ( (int) $voucher['max_uses'] > 0 && (int) $voucher['uses_count'] >= (int) $voucher['max_uses'] ) {
+				return self::error( 'quota_exceeded', 'No remaining uses.' );
+			}
 		}
 
 		if ( VoucherClaim::find_for_user( $voucher_id, $user_id ) !== null ) {
@@ -52,6 +63,13 @@ final class ClaimHandler {
 		$membership = MembershipService::get_for_user( $user_id );
 		if ( ( $membership['status'] ?? 'active' ) !== 'active' ) {
 			return self::error( 'account_suspended', 'Your account is currently suspended.' );
+		}
+
+		// Audience targeting (v1.11.0). The visibility query already excludes
+		// vouchers the user can't see, but a malicious or stale claim attempt
+		// (e.g. tier downgrade between page-render and click) must still fail.
+		if ( ! self::user_in_audience( $voucher, $user_id, $membership ) ) {
+			return self::error( 'voucher_not_for_user', 'This voucher is not available for your account.' );
 		}
 
 		// Filter hook — lets the membership level (or future Notifications)
@@ -78,15 +96,39 @@ final class ClaimHandler {
 		if ( ! $result['valid'] ) {
 			return $result;
 		}
+		$voucher = $result['voucher'];
+		$mode    = (string) ( $voucher['distribution_mode'] ?? VoucherService::MODE_SINGLE );
 
-		$claim_id = VoucherClaim::claim( $voucher_id, $user_id );
+		// Multi-code: atomically pick a code BEFORE inserting the claim row.
+		// If we did it in the other order, a UNIQUE collision on (voucher,user)
+		// would leave us with an unused-but-assigned code dangling.
+		$code_id   = null;
+		$code_text = null;
+		if ( $mode === VoucherService::MODE_MULTI_PUBLIC ) {
+			$picked = VoucherCode::pick_available_for_user( $voucher_id, $user_id );
+			if ( $picked === null ) {
+				return self::error( 'quota_exceeded', 'No remaining codes.' );
+			}
+			$code_id   = (int) $picked['id'];
+			$code_text = (string) $picked['code'];
+		}
+
+		$claim_id = VoucherClaim::claim( $voucher_id, $user_id, $code_id );
 
 		// 0 = UNIQUE collision (won the validate() race but lost the insert race).
 		// Surface as already_claimed so the customer gets a sensible message.
 		if ( $claim_id === 0 ) {
+			// Roll back the code assignment — the claim never landed, so we
+			// must release the code back to 'available' for someone else.
+			if ( $code_id !== null ) {
+				self::release_code( $code_id );
+			}
 			return self::error( 'already_claimed', 'You have already claimed this voucher.' );
 		}
 		if ( $claim_id < 0 ) {
+			if ( $code_id !== null ) {
+				self::release_code( $code_id );
+			}
 			return self::error( 'claim_failed', 'Could not record claim. Please try again.' );
 		}
 
@@ -95,10 +137,27 @@ final class ClaimHandler {
 		do_action( 'crm_voucher_claimed', $voucher_id, $user_id );
 
 		return [
-			'valid'    => true,
-			'claim_id' => $claim_id,
-			'voucher'  => $result['voucher'],
+			'valid'         => true,
+			'claim_id'      => $claim_id,
+			'voucher'       => $voucher,
+			'assigned_code' => $code_text, // null for single-code; the unique code for multi-code
 		];
+	}
+
+	/**
+	 * Releases a previously-assigned code back to 'available'. Used by the
+	 * claim path when the claim insert fails after the code pick succeeded —
+	 * leaving the code 'assigned' would make it unredeemable forever.
+	 */
+	private static function release_code( int $code_id ): void {
+		global $wpdb;
+		$wpdb->update(
+			$wpdb->prefix . VoucherCode::TABLE,
+			[ 'status' => 'available', 'assigned_to_user' => null, 'assigned_at' => null ],
+			[ 'id' => $code_id, 'status' => 'assigned' ],
+			[ '%s', '%d', '%s' ],
+			[ '%d', '%s' ]
+		);
 	}
 
 	/**
@@ -120,6 +179,23 @@ final class ClaimHandler {
 		foreach ( $order->get_coupon_codes() as $raw_code ) {
 			$code = strtoupper( $raw_code );
 
+			// First try a multi-code lookup: each row in crm_voucher_codes is
+			// a real WC coupon. If found, the voucher_id on the row tells us
+			// which campaign it belongs to.
+			$code_row = VoucherCode::find_by_code( $code );
+			if ( $code_row ) {
+				$voucher_id = (int) $code_row['voucher_id'];
+				$ok = VoucherClaim::mark_used( $voucher_id, $user_id, $order_id );
+				if ( ! $ok ) {
+					continue;
+				}
+				VoucherCode::mark_used_by_order( $code, $order_id );
+				Voucher::increment_uses( $voucher_id );
+				$consumed++;
+				continue;
+			}
+
+			// Otherwise, single-code path — code matches the voucher's master code.
 			$voucher = Voucher::find_by_code( $code );
 			if ( ! $voucher ) {
 				continue; // not a CRM voucher
@@ -127,7 +203,7 @@ final class ClaimHandler {
 
 			$ok = VoucherClaim::mark_used( (int) $voucher['id'], $user_id, $order_id );
 			if ( ! $ok ) {
-				continue; // already used, not claimed by this user, or race lost
+				continue;
 			}
 
 			Voucher::increment_uses( (int) $voucher['id'] );
@@ -147,5 +223,56 @@ final class ClaimHandler {
 
 	private static function error( string $code, string $message ): array {
 		return [ 'valid' => false, 'code' => $code, 'message' => $message ];
+	}
+
+	/**
+	 * Mirrors the SQL audience filter in list_available_unclaimed.sql so that
+	 * a direct claim() call without going through the visible list still
+	 * enforces the same gating. The membership row is already loaded by the
+	 * caller; passing it through saves a duplicate lookup.
+	 *
+	 * @param array<string,mixed>      $voucher
+	 * @param array<string,mixed>|null $membership
+	 */
+	private static function user_in_audience( array $voucher, int $user_id, ?array $membership ): bool {
+		$mode = (string) ( $voucher['audience_mode'] ?? 'public' );
+		if ( $mode === 'public' ) {
+			return true;
+		}
+
+		if ( $mode === 'tier' ) {
+			$decoded = is_string( $voucher['allowed_tiers'] ?? null )
+				? json_decode( (string) $voucher['allowed_tiers'], true )
+				: ( $voucher['allowed_tiers'] ?? null );
+			if ( ! is_array( $decoded ) || empty( $decoded ) ) {
+				return false; // mode='tier' with empty list = nobody qualifies
+			}
+			$user_tier = (string) ( $membership['membership_level'] ?? TierRegistry::default_slug() );
+			return in_array( $user_tier, array_map( 'strval', $decoded ), true );
+		}
+
+		if ( $mode === 'email' ) {
+			$user = get_user_by( 'id', $user_id );
+			if ( ! $user ) {
+				return false;
+			}
+			$user_email = strtolower( (string) $user->user_email );
+			$decoded    = is_string( $voucher['email_restrictions'] ?? null )
+				? json_decode( (string) $voucher['email_restrictions'], true )
+				: ( $voucher['email_restrictions'] ?? null );
+			if ( ! is_array( $decoded ) ) {
+				return false;
+			}
+			foreach ( $decoded as $entry ) {
+				$email = is_array( $entry ) ? (string) ( $entry['email'] ?? '' ) : (string) $entry;
+				if ( strtolower( trim( $email ) ) === $user_email ) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// Unknown mode → fail closed.
+		return false;
 	}
 }

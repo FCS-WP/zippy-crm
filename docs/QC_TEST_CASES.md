@@ -38,6 +38,8 @@ All accounts use the same password: **`TestQA1234!`**
 | `QA-FIXED-10` | Fixed cart | $10 | — | For claim + apply-to-cart tests |
 | `QA-MINORDER-15` | Percent | 15% | $50 | Tests the minimum-order threshold |
 | `QA-EXPIRED` | Fixed cart | $5 | — | Already expired — must NOT appear in customer list |
+| **Multi-code campaign — 20% off (3 slots)** | Percent | 20% | — | One voucher, three unique codes — `QAMC-AAA111`, `QAMC-BBB222`, `QAMC-CCC333`. The customer never sees those codes in the **Available** list — they see the campaign card. On claim, each of the first three claimers is assigned **one** unique code at random. The 4th claimer is rejected (no slots left). |
+| `QA-GOLDVIP-30` | Percent | 30% | — | **Tier-restricted to Gold + VIP only.** Free and Silver members must NOT see it in their Available list. Gold and VIP members can claim normally. If a claimed-by member is later downgraded out of Gold/VIP, their claim is auto-revoked (status flips to `expired`). |
 
 ### 4. How to log in as a test account
 
@@ -291,6 +293,92 @@ Submit failures back to the dev with the test case ID (e.g. "TC-PTS-02 failed").
 
 ---
 
+### TC-PTS-07: Tier with earn rate 0 awards no points
+
+> **What this tests:** A tier whose earn rate is set to 0 must award no points on order completion, regardless of the order subtotal. This is the default for new tiers in v1.12.0.
+>
+> Requires admin access.
+
+**Account:** `qa-vip-1` (VIP tier — admin-only so the auto-evaluator won't promote them)
+
+**Steps — admin sets VIP rate to 0**
+1. Log in to `/wp-admin/` as administrator. Go to **Zippy CRM → Tiers**.
+2. Find the **VIP** tier and click to edit.
+3. Set **Earn rate (points per $1)** to `0`.
+4. Save.
+
+**Expected — Tiers list**
+- [ ] The VIP row's Earn rate column now shows **"No earn"** (not "0.00 pt/$")
+
+**Steps — customer places order**
+5. Log out, log in as `qa-vip-1`.
+6. Note the current points balance (visible on the Points tab).
+7. Add any product to your cart, complete checkout, and pay.
+8. Wait for the order status to flip to Completed (admin may need to mark it so).
+
+**Expected**
+- [ ] After completion, qa-vip-1's points balance is **unchanged** (no earn row added)
+- [ ] In the Points → Activity list, no new "Order #N" earn entry appears for this order
+
+**Cleanup** — restore VIP earn rate to 2.0 (or whatever your seed default is) so other tests aren't affected.
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-PTS-08: Excluded products + categories don't earn points
+
+> **What this tests:** The new Settings panel lets admins blacklist specific products or categories. Line items matching the blacklist must contribute zero to the points earn calculation, while unblacklisted items in the same order still earn normally.
+>
+> Requires admin access. Test products are easier to verify if you have at least 2 distinct products in 2 distinct categories.
+
+**Account:** `qa-vip-1` (admin-only tier so auto-promotion doesn't confuse the test)
+
+**Pre-condition:** VIP earn rate is set to `1` (1 pt per $1). If you ran TC-PTS-07, restore it to 1 first.
+
+**Steps — admin configures blacklist**
+1. Log in to `/wp-admin/`. Go to **Zippy CRM → Settings**.
+2. Verify the page loads with three sections:
+   - "Earn rate" (info card linking to Tiers)
+   - "Excluded products"
+   - "Excluded categories"
+3. In **Excluded products**, click "Add" and pick **one specific product** (e.g. "Test Product A").
+4. Save.
+
+**Expected — Settings page**
+- [ ] The chosen product appears as a chip in the Excluded products field
+- [ ] A green "Saved [time]" indicator appears next to the Save button after saving
+- [ ] Reload the page — the product is still listed (persisted)
+
+**Steps — customer order with mixed cart**
+5. Log out, log in as `qa-vip-1`. Note the current points balance.
+6. Add to cart: **1× the excluded product** (e.g. $10) AND **1× any other (non-excluded) product** (e.g. $15).
+7. Complete checkout, pay. Mark the order completed if needed.
+
+**Expected**
+- [ ] Points awarded ≈ floor of the **non-excluded** subtotal only (e.g. ~15 pts in this example)
+- [ ] The excluded product's $10 is **not** counted toward earned points
+- [ ] The Activity list shows one "Order #N" entry with the partial amount
+
+**Steps — exclude an entire category**
+8. Back in admin Settings, **clear the product blacklist** and add the category that contained the previous excluded product to **Excluded categories**.
+9. Save.
+10. Repeat the order from step 6 (any product in that category + any product not in it).
+
+**Expected**
+- [ ] Now ALL products in the excluded category contribute 0 points (not just the one previously excluded by ID)
+- [ ] The other product still earns normally
+
+**Cleanup** — clear both blacklist sections so other tests aren't affected.
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
 ## Vouchers tab (TC-VCH)
 
 ### TC-VCH-01: Available vouchers list
@@ -426,6 +514,375 @@ Submit failures back to the dev with the test case ID (e.g. "TC-PTS-02 failed").
 
 ---
 
+### TC-VCH-07: Multi-code campaign — first claim assigns a unique code
+
+> **What this tests:** A "multi-code" voucher is one campaign with multiple unique codes inside it. Each customer who claims gets *their own* unique code (not the same one shared by everyone). This case verifies the first claim works and the right code shows up.
+
+**Account:** `qa-silver-1`
+
+**Pre-condition:** Ask the dev to **reset fixtures** so all three slots are still available:
+```bash
+wp eval 'ZippyCrm\Support\Seeder::reset(); ZippyCrm\Support\Seeder::seed_qc_fixtures();'
+```
+
+> **Optional admin sanity check first:** if you have admin access, log in to `/wp-admin/` and go to **Zippy CRM → Vouchers**. The multi-code campaign should appear in the list with a violet **"Multi-code"** badge in the Code column (instead of a real code). Click the row to open the edit drawer — the form should show "Multi-code (public)" selected and a note that codes were minted at create time. **Do not edit the multi-code voucher** — re-saving it has no effect on the codes (they're immutable).
+
+**Steps**
+1. Log in as `qa-silver-1`.
+2. Go to **My Account → Vouchers → Available**.
+3. Find the card titled **"QA — multi-code 20% off (3 slots)"**.
+
+**Expected — before claim**
+- [ ] Card shows the title and description ("Multi-code campaign — each user gets their own unique code; only 3 customers total can claim.")
+- [ ] Card shows **20%** discount and the expiry date
+- [ ] Card does **NOT** display any code yet — customers shouldn't see real codes until they claim
+- [ ] A **Claim voucher** button is visible
+
+**Steps (continued)**
+4. Click **Claim voucher**.
+
+**Expected — after claim**
+- [ ] No page reload happened — the change is instant
+- [ ] Card immediately switches to a green "claimed" state with a code visible
+- [ ] The visible code starts with `QAMC-` and matches one of: `QAMC-AAA111`, `QAMC-BBB222`, or `QAMC-CCC333`
+- [ ] **Write down which code you got** — you'll need it for the next test case
+- [ ] **My Claims** sub-tab counter increased by 1
+- [ ] Switch to **My Claims** — the new claim card shows the same code you just got
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Code assigned to this tester:** ____________________
+**Notes:**
+
+---
+
+### TC-VCH-08: Multi-code campaign — different customers get different codes
+
+> **What this tests:** Two more customers claim the same campaign — each must get a **different** code than the first tester (and from each other). This is the core promise of multi-code: one campaign, N unique codes, no overlap.
+
+**Pre-condition:** Run TC-VCH-07 first (don't reset fixtures between TC-VCH-07 and this case).
+
+#### Part A — second customer
+
+**Account:** `qa-gold-1`
+
+**Steps**
+1. Log out of `qa-silver-1`. Log in as `qa-gold-1`.
+2. Go to **Vouchers → Available**, find the multi-code campaign card, and click **Claim voucher**.
+
+**Expected**
+- [ ] Claim succeeds; a code is shown
+- [ ] The code is **different** from the one `qa-silver-1` got in TC-VCH-07
+- [ ] The code is one of the remaining two: `QAMC-AAA111` / `QAMC-BBB222` / `QAMC-CCC333` (whichever wasn't picked in TC-VCH-07)
+- [ ] **Write down this second code**
+
+**Code assigned to qa-gold-1:** ____________________
+
+#### Part B — third customer
+
+**Account:** `qa-vip-1`
+
+**Steps**
+1. Log out. Log in as `qa-vip-1`.
+2. Claim the same multi-code campaign.
+
+**Expected**
+- [ ] Claim succeeds; a code is shown
+- [ ] The code is **different** from both codes already taken
+- [ ] After this claim, all three codes (`QAMC-AAA111`, `QAMC-BBB222`, `QAMC-CCC333`) have been distributed exactly once across the three testers — no duplicates
+
+**Code assigned to qa-vip-1:** ____________________
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-09: Multi-code campaign — 4th claim is rejected (quota exhausted)
+
+> **What this tests:** A 3-slot campaign has a hard cap. Once 3 customers have claimed, the 4th must be turned away — the card should disappear from **Available** OR show a "no slots left" / quota-exhausted state.
+
+**Pre-condition:** Run TC-VCH-07 and TC-VCH-08 first. All three slots are now taken.
+
+**Account:** `qa-free-1` (the only remaining seeded account that hasn't claimed)
+
+**Steps**
+1. Log out. Log in as `qa-free-1`.
+2. Go to **Vouchers → Available**.
+
+**Expected**
+- [ ] The "QA — multi-code 20% off (3 slots)" card is **NOT** in the Available list (it has been removed because no slots remain)
+- [ ] **OR** the card appears but with a "Fully claimed" / "No slots remaining" indicator and the **Claim voucher** button is disabled or absent
+- [ ] If the tester does see a Claim button and clicks it, the system shows a clear error message (e.g. "No more vouchers available" / "Quota exceeded") — not a silent failure or page crash
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-10: Customer A's code can't be used by customer B at checkout
+
+> **What this tests:** Each multi-code is tied to one customer. Even if customer B somehow learns customer A's code, applying it at checkout must fail — codes are single-use AND user-bound after claim.
+
+**Pre-condition:** TC-VCH-07 must have been run so `qa-silver-1` has been assigned a code. You'll use the code value `qa-silver-1` got (write it down).
+
+**Account:** `qa-gold-1`
+
+**Steps**
+1. Log in as `qa-gold-1`.
+2. Add any product to your cart.
+3. Go to `/cart/`.
+4. In the **"Add a coupon"** field, paste the code that `qa-silver-1` was assigned (NOT the code `qa-gold-1` got).
+5. Click Apply.
+
+**Expected**
+- [ ] WooCommerce rejects the coupon — error message appears (e.g. "Coupon usage limit has been reached", "This coupon does not exist", or similar)
+- [ ] No discount is applied to the cart
+- [ ] Cart total is unchanged
+
+**Then** apply `qa-gold-1`'s OWN code (the one assigned during TC-VCH-08 Part A):
+- [ ] That coupon applies cleanly and a 20% discount appears
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-11: Multi-code — same customer can't claim twice
+
+> **What this tests:** A customer who has already claimed from a multi-code campaign can't claim a second time (they shouldn't get two codes from the same campaign).
+
+**Account:** `qa-silver-1` (already claimed in TC-VCH-07)
+
+**Steps**
+1. Log in as `qa-silver-1`.
+2. Go to **Vouchers → Available**.
+
+**Expected**
+- [ ] The "QA — multi-code 20% off (3 slots)" card is **NOT** in the Available list (qa-silver-1 already claimed it; the system filters out already-claimed campaigns)
+- [ ] Switch to **My Claims** — qa-silver-1's claim is there with the original code, exactly once (no duplicate claim row)
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-12: Tier-restricted voucher — only qualifying members see it
+
+> **What this tests:** A voucher restricted to Gold + VIP must be invisible to Free and Silver members on the Available list. This is the visibility filter — non-qualifying customers shouldn't see the offer at all (no "tease").
+
+**Pre-condition:** Ask the dev to **reset fixtures**:
+```bash
+wp eval 'ZippyCrm\Support\Seeder::reset(); ZippyCrm\Support\Seeder::seed_qc_fixtures();'
+```
+
+**Steps**
+1. Log in as `qa-free-1`. Go to **My Account → Vouchers → Available**.
+2. Look for a card titled **"QA — Gold/VIP exclusive 30%"**.
+
+**Expected — Free member**
+- [ ] The Gold/VIP card is **NOT** present in the Available list
+
+**Steps (continued)**
+3. Log out. Log in as `qa-silver-1`. Go to **Vouchers → Available**.
+
+**Expected — Silver member**
+- [ ] The Gold/VIP card is **NOT** present in the Available list (Silver doesn't qualify)
+
+**Steps (continued)**
+4. Log out. Log in as `qa-gold-1`. Go to **Vouchers → Available**.
+
+**Expected — Gold member**
+- [ ] The Gold/VIP card **IS** present, with discount "30%"
+- [ ] A Claim button is visible
+
+**Steps (continued)**
+5. Click **Claim voucher** on the Gold/VIP card.
+
+**Expected**
+- [ ] Claim succeeds — the card flips to a green "claimed" state with the code visible
+- [ ] **My Claims** counter increased by 1
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-13: Tier downgrade auto-revokes the claim
+
+> **What this tests:** If a Gold member claims a Gold/VIP voucher and then gets downgraded to Silver (e.g. by an admin or by inactivity), the claim must be auto-revoked. The customer's Ready-to-use code goes away — they can no longer use it at checkout.
+>
+> Requires admin access (only an admin can change someone's tier).
+
+**Pre-condition:** TC-VCH-12 must have been run first — `qa-gold-1` has claimed the Gold/VIP voucher.
+
+**Steps**
+1. Log in to `/wp-admin/` as an administrator.
+2. Go to **Zippy CRM → Members**.
+3. Find `qa-gold-1` in the member list and click to open their record.
+4. Change their tier from **Gold** to **Silver** and save.
+5. Open a private/incognito window. Log in to `/my-account/` as `qa-gold-1`.
+6. Go to **Vouchers → My Claims**.
+
+**Expected**
+- [ ] The "QA — Gold/VIP exclusive 30%" claim is shown with status **Expired** (or no longer appears as a usable / Ready-to-use claim)
+- [ ] The Available list does NOT show the Gold/VIP voucher again — Silver doesn't qualify, so it stays hidden
+
+**Steps (continued — recovery)**
+7. As admin, change `qa-gold-1`'s tier back to **Gold**.
+8. Reload the customer's My Account → Vouchers page.
+
+**Expected**
+- [ ] The voucher does NOT auto-restore to a usable state — once expired, it stays expired (claim history is preserved; the customer would need a new claim opportunity)
+- [ ] The Available list now shows the Gold/VIP voucher again as fresh (it can be re-claimed because the prior claim is `expired`, not `claimed`)
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-14: Tier voucher rejects an unauthorized claim attempt
+
+> **What this tests:** Even if a non-qualifying user somehow tries to claim (via stale URL or direct API call), the system must refuse. Belt-and-suspenders for the visibility filter.
+>
+> This is mostly a backend test; QA can verify by attempting via WP-CLI or just confirming the visibility filter in TC-VCH-12 matches the screenshot below.
+
+**Account:** `qa-silver-1` (does not qualify for Gold/VIP voucher)
+
+**Steps (manual UI path)**
+1. Log in as `qa-silver-1`. Go to **Vouchers → Available**.
+2. Confirm the Gold/VIP card is hidden (already covered in TC-VCH-12).
+
+**Optional dev check** (skip if you don't have terminal access):
+```bash
+wp eval '$id = ZippyCrm\Models\Voucher::find_by_code("QA-GOLDVIP-30")["id"]; $silver = get_user_by("login", "qa-silver-1")->ID; var_dump(ZippyCrm\Services\ClaimHandler::claim($id, $silver));'
+```
+Expected output: `["valid" => false, "code" => "voucher_not_for_user", ...]`
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-15: Admin Codes drawer for multi-code campaigns
+
+> **What this tests:** Admin can inspect per-code state for a multi-code voucher — see who claimed which code, who used theirs, and what's still available. This requires admin access.
+
+**Pre-condition:** Run TC-VCH-07 / TC-VCH-08 first so at least one code is `assigned`. Bonus if you also walked through a checkout in TC-VCH-04 with the assigned code so one is `used`.
+
+**Steps**
+1. Log in to `/wp-admin/` as administrator.
+2. Go to **Zippy CRM → Vouchers**.
+3. Find the row "QA — multi-code 20% off (3 slots)". The Code column shows a violet **Multi-code** badge instead of a real code.
+4. Open the row's **⋯ (overflow menu)**.
+
+**Expected — menu items**
+- [ ] An entry labeled **Codes** is present (this entry should NOT appear on single-code voucher rows like `QA-PERCENT-25`)
+
+**Steps (continued)**
+5. Click **Codes**.
+
+**Expected — drawer opens**
+- [ ] A drawer slides in from the right titled "Codes — QA — multi-code 20% off (3 slots)"
+- [ ] Top of drawer shows **4 colored count tiles**: Total, Available, Assigned, Used (the numbers depend on what claims you've made; each tile sums correctly)
+- [ ] Below the tiles is a row of filter chips: **All / Available (n) / Assigned (n) / Used (n) / Expired (n)** — counts match the tiles
+- [ ] Below filters is a list of code rows. Each row shows:
+  - The code (e.g. `QAMC-AAA111`) as a monospaced chip
+  - A status pill (color-coded: green=available, blue=assigned, violet=used)
+  - For assigned/used rows: the assignee's name and email below the code
+  - For used rows: a "Used [date] · order #[n]" line on the right
+  - For assigned rows: an "Assigned [date]" line on the right
+  - For available rows: just a "—" on the right
+
+**Steps (continued)**
+6. Click the **Assigned** filter chip.
+
+**Expected**
+- [ ] List narrows to only assigned codes; count tile values stay the same (counts always reflect the full set, not the filter)
+
+7. Click **Used** filter (if any used).
+
+**Expected**
+- [ ] List narrows to used codes only
+
+8. Click **All** to clear the filter.
+
+**Expected**
+- [ ] All codes visible again
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-VCH-16: Tier-restricted multi-code campaign (combined feature)
+
+> **What this tests:** Combining tier targeting with multi-code distribution — a single campaign of N unique codes available only to a specific tier. This is the most powerful voucher shape in the system.
+>
+> Requires admin access and at least one Gold + one VIP test account.
+
+**Pre-condition:** `wp eval 'ZippyCrm\Support\Seeder::reset(); ZippyCrm\Support\Seeder::seed_qc_fixtures();'`
+
+**Steps — admin creates the voucher**
+1. Log in to `/wp-admin/` as administrator. Go to **Zippy CRM → Vouchers → New voucher**.
+2. On the **General** tab:
+   - Distribution mode: **Multi-code (public)**
+   - Slots: `2`
+   - Codes: leave empty (auto-generate)
+   - Title: `Combined test — VIP/Gold multi`
+   - Discount type: `Percent off (cart or per-item if restricted)`
+   - Discount: `40`
+3. On the **Restrictions** tab:
+   - Audience: **Membership tiers**
+   - Tick **Gold** and **VIP**
+4. Save → Publish.
+
+**Expected — on the Vouchers list**
+- [ ] The new row shows the violet **Multi-code** badge in the Code column
+- [ ] The Title column shows the title with an amber **Tier** badge next to it
+- [ ] Discount column shows `40%`
+
+**Steps — customer flow**
+5. Open an incognito window, log in as `qa-free-1`. Visit My Account → Vouchers.
+
+**Expected**
+- [ ] The "Combined test — VIP/Gold multi" card is **NOT** visible
+
+6. Log out, log in as `qa-silver-1`.
+
+**Expected**
+- [ ] Still **NOT** visible (Silver doesn't qualify)
+
+7. Log out, log in as `qa-gold-1`. Click Claim.
+
+**Expected**
+- [ ] Card visible, claim succeeds, a unique code is shown
+
+8. Log out, log in as `qa-vip-1`. Click Claim.
+
+**Expected**
+- [ ] Card visible, claim succeeds, a **different** unique code is shown
+
+9. Open the admin Codes drawer for this voucher (per TC-VCH-15).
+
+**Expected**
+- [ ] Counts: Available 0, Assigned 2, Used 0
+- [ ] Two rows show the gold + VIP customers as assignees
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
 ## Notifications tab (TC-NOT)
 
 ### TC-NOT-01: Default state — both channels on
@@ -524,6 +981,38 @@ Submit failures back to the dev with the test case ID (e.g. "TC-PTS-02 failed").
 - [ ] **Both are checked by default**
 - [ ] You can uncheck them
 - [ ] *(If you actually register: the new account's Notifications tab reflects what you chose — but you don't have to test this if it's risky to create accounts in your test env)*
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-NOT-06: Tier-restricted vouchers only email qualifying members
+
+> **What this tests:** When an admin publishes a Gold/VIP-only voucher, the email goes ONLY to Gold and VIP members. Free and Silver members must NOT receive a "new voucher available" email — that would tease them with offers they can't claim.
+>
+> Requires admin access and a working SMTP/test mailer (or the dev needs to inspect the queue table).
+
+**Pre-condition:** `wp eval 'ZippyCrm\Support\Seeder::reset(); ZippyCrm\Support\Seeder::seed_qc_fixtures();'`
+
+**Steps — admin publishes**
+1. Log in to `/wp-admin/`. Go to **Zippy CRM → Vouchers → New voucher**.
+2. Fill: Title `Notif tier test 25%`, Discount type `Percent off`, Discount `25`.
+3. Restrictions tab → Audience: **Membership tiers** → tick **Gold** and **VIP**.
+4. Save → Publish.
+
+**Dev-side verification** (skip if you don't have terminal access):
+```bash
+wp eval '$id = ZippyCrm\Models\Voucher::find_by_code(strtoupper("notif-test"))["id"] ?? null; if ($id) { global $wpdb; var_dump($wpdb->get_results($wpdb->prepare("SELECT u.user_login FROM {$wpdb->prefix}crm_notification_log nl JOIN {$wpdb->prefix}users u ON u.ID = nl.user_id WHERE voucher_id = %d", $id))); }'
+```
+Expected output: only `qa-gold-1` and `qa-vip-1` (and any other Gold/VIP members) appear in the queue.
+
+**Customer-side verification** (if you have inboxes for the test accounts):
+- [ ] `qa-gold-1` receives the voucher email
+- [ ] `qa-vip-1` receives the voucher email
+- [ ] `qa-free-1` does **NOT** receive an email
+- [ ] `qa-silver-1` does **NOT** receive an email
 
 **Result:** [ ] Pass [ ] Fail [ ] Blocked
 **Tester / date:**

@@ -63,17 +63,24 @@ final class AuditLog {
 		?int $actor_id,
 		?int $target_id,
 		int $page = 1,
-		int $per_page = 25
+		int $per_page = 25,
+		?string $from = null,
+		?string $to = null
 	): array {
 		$page     = max( 1, $page );
 		$per_page = max( 1, min( 100, $per_page ) );
 		$offset   = ( $page - 1 ) * $per_page;
 
-		// Sentinels: -1 means "no filter" for the int columns (real ids are
-		// always positive). For event, '__all__' is the no-filter token.
+		// Sentinels:
+		//   '__all__' for VARCHAR (event)
+		//   -1        for INT (actor_id, target_id)
+		//   bracket DATETIMEs for created_at — see list_paginated.sql for why
+		//   '__all__' wouldn't work on a DATETIME column.
 		$event_token  = $event !== '' ? $event : '__all__';
 		$actor_token  = $actor_id !== null  ? $actor_id  : -1;
 		$target_token = $target_id !== null ? $target_id : -1;
+		$from_token   = $from !== null && $from !== '' ? $from : '1970-01-01 00:00:00';
+		$to_token     = $to   !== null && $to   !== '' ? $to   : '9999-12-31 23:59:59';
 
 		global $wpdb;
 
@@ -84,6 +91,8 @@ final class AuditLog {
 				$event_token,  $event_token,
 				$actor_token,  $actor_token,
 				$target_token, $target_token,
+				$from_token,
+				$to_token,
 				$per_page, $offset
 			),
 			ARRAY_A
@@ -95,7 +104,9 @@ final class AuditLog {
 				$count_sql,
 				$event_token,  $event_token,
 				$actor_token,  $actor_token,
-				$target_token, $target_token
+				$target_token, $target_token,
+				$from_token,
+				$to_token
 			)
 		);
 

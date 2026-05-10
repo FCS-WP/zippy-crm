@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-$is_percent  = ( $voucher['discount_type'] ?? '' ) === 'percent';
+$is_percent  = in_array( (string) ( $voucher['discount_type'] ?? '' ), \ZippyCrm\Models\Voucher::PERCENT_DISCOUNT_TYPES, true );
 $value       = (float) ( $voucher['discount_value'] ?? 0 );
 $value_label = $is_percent
 	? round( $value ) . '%'

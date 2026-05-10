@@ -274,10 +274,12 @@ final class TierRegistry {
 
 		if ( isset( $data['multiplier'] ) ) {
 			$m = (float) $data['multiplier'];
-			if ( $m <= 0 || $m > 10 ) {
+			// 0 is valid — it means "this tier earns no points" and is the
+			// default for new tiers (admin must opt in to earning).
+			if ( $m < 0 || $m > 10 ) {
 				return new \WP_Error(
 					'tier_bad_multiplier',
-					__( 'Multiplier must be > 0 and ≤ 10.', 'zippy-crm' ),
+					__( 'Earn rate must be ≥ 0 and ≤ 10.', 'zippy-crm' ),
 					[ 'status' => 400 ]
 				);
 			}

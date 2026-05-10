@@ -206,7 +206,8 @@ final class NotifEngine {
 	}
 
 	private static function build_subject( array $voucher ): string {
-		$value = $voucher['discount_type'] === 'percent'
+		$is_percent = in_array( (string) ( $voucher['discount_type'] ?? '' ), \ZippyCrm\Models\Voucher::PERCENT_DISCOUNT_TYPES, true );
+		$value = $is_percent
 			? round( (float) $voucher['discount_value'] ) . '%'
 			: '$' . number_format( (float) $voucher['discount_value'], 2 );
 
@@ -246,8 +247,47 @@ final class NotifEngine {
 	private static function query_unsent_subscribers( int $voucher_id, int $limit, int $offset ): array {
 		global $wpdb;
 		$sql  = QueryLoader::query( 'notifications/select_unsent_subscribers.sql' );
-		$rows = $wpdb->get_col( $wpdb->prepare( $sql, $voucher_id, $limit, $offset ) );
-		return array_map( 'intval', $rows ?: [] );
+		$rows = $wpdb->get_col( $wpdb->prepare( $sql, $voucher_id, $voucher_id, $limit, $offset ) );
+		$user_ids = array_map( 'intval', $rows ?: [] );
+
+		if ( empty( $user_ids ) ) {
+			return $user_ids;
+		}
+
+		// audience_mode='email' rows are returned unfiltered by the SQL — apply
+		// the email-list match in PHP. Public + tier modes are already filtered
+		// at the DB layer.
+		$voucher = Voucher::find( $voucher_id );
+		if ( ! $voucher || ( $voucher['audience_mode'] ?? 'public' ) !== 'email' ) {
+			return $user_ids;
+		}
+
+		$entries = json_decode( (string) ( $voucher['email_restrictions'] ?? '' ), true );
+		if ( ! is_array( $entries ) ) {
+			// audience_mode='email' but no list = nobody qualifies. Defensive
+			// guard; the validator should have caught this on create.
+			return [];
+		}
+		$allowed = [];
+		foreach ( $entries as $entry ) {
+			$email = is_array( $entry ) ? (string) ( $entry['email'] ?? '' ) : (string) $entry;
+			$email = strtolower( trim( $email ) );
+			if ( $email !== '' ) {
+				$allowed[ $email ] = true;
+			}
+		}
+
+		$kept = [];
+		foreach ( $user_ids as $uid ) {
+			$user = get_user_by( 'id', $uid );
+			if ( ! $user ) {
+				continue;
+			}
+			if ( isset( $allowed[ strtolower( $user->user_email ) ] ) ) {
+				$kept[] = $uid;
+			}
+		}
+		return $kept;
 	}
 
 	private static function batch_size(): int {

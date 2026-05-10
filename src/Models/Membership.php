@@ -134,7 +134,25 @@ final class Membership {
 	 * @param string $search  Free-text against login/email/display_name. '' to skip.
 	 * @return array<int,array<string,mixed>>
 	 */
-	public static function list_for_admin( string $level, string $status, string $search, int $page, int $per_page ): array {
+	/**
+	 * Whitelisted sortable columns → SQL fragments. Joined columns are
+	 * table-aliased to match list_paginated.sql's table aliases (m, u, s).
+	 */
+	private const SORTABLE = [
+		'id'              => 'm.id',
+		'user_login'      => 'u.user_login',
+		'user_email'      => 'u.user_email',
+		'display_name'    => 'u.display_name',
+		'user_registered' => 'u.user_registered',
+		'membership_level'=> 'm.membership_level',
+		'membership_status'=> 'm.status',
+		'joined_at'       => 'm.joined_at',
+		'expires_at'      => 'm.expires_at',
+		'points_balance'  => 'COALESCE(s.balance, 0)',
+		'points_earned'   => 'COALESCE(s.total_earned, 0)',
+	];
+
+	public static function list_for_admin( string $level, string $status, string $search, int $page, int $per_page, string $sort = '', string $direction = 'desc' ): array {
 		global $wpdb;
 
 		$level_active = $level !== '' && in_array( $level, self::valid_slugs(), true );
@@ -151,7 +169,15 @@ final class Membership {
 		$per_page = max( 1, min( 100, $per_page ) );
 		$offset   = ( $page - 1 ) * $per_page;
 
-		$sql  = QueryLoader::query( 'admin/members/list_paginated.sql' );
+		$order_by = self::resolve_order_by( $sort, $direction );
+
+		// {order_by} is substituted from a strict whitelist BEFORE prepare().
+		$sql = str_replace(
+			'{order_by}',
+			$order_by,
+			QueryLoader::query( 'admin/members/list_paginated.sql' )
+		);
+
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				$sql,
@@ -163,6 +189,15 @@ final class Membership {
 			ARRAY_A
 		);
 		return $rows ?: [];
+	}
+
+	private static function resolve_order_by( string $sort, string $direction ): string {
+		$col = self::SORTABLE[ $sort ] ?? null;
+		if ( ! $col ) {
+			return 'm.id DESC';
+		}
+		$dir = strtolower( $direction ) === 'asc' ? 'ASC' : 'DESC';
+		return $col . ' ' . $dir . ', m.id DESC';
 	}
 
 	/**

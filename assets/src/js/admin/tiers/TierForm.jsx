@@ -4,10 +4,14 @@ import { Button } from "@/js/shared/ui/button.jsx";
 import { Input } from "@/js/shared/ui/input.jsx";
 import { Switch } from "@/js/shared/ui/switch.jsx";
 
+// New tiers default to earn rate 0 — no points until the admin explicitly
+// configures a non-zero rate. This is intentional: a fresh install awards no
+// points until the admin opts in. Existing tiers keep whatever value they
+// already have via fromRow() below.
 const EMPTY = {
 	slug: "",
 	label: "",
-	multiplier: "1.00",
+	multiplier: "0",
 	threshold_orders: "",
 	threshold_spend: "",
 	is_admin_only: false,
@@ -19,7 +23,7 @@ function fromRow(row) {
 	return {
 		slug: row.slug ?? "",
 		label: row.label ?? "",
-		multiplier: row.multiplier !== undefined ? String(row.multiplier) : "1.00",
+		multiplier: row.multiplier !== undefined ? String(row.multiplier) : "0",
 		threshold_orders: row.threshold_orders ?? "",
 		threshold_spend: row.threshold_spend ?? "",
 		is_admin_only: Boolean(row.is_admin_only),
@@ -88,8 +92,11 @@ export function TierForm({ row, onClose }) {
 			</Field>
 
 			<div className="zc-grid zc-grid-cols-2 zc-gap-4">
-				<Field label="Multiplier (×)" hint="Earn-rate multiplier. e.g. 2.00 = 2× points per dollar.">
-					<Input type="number" step="0.05" min="0.05" max="10" value={form.multiplier} onChange={set("multiplier")} required />
+				<Field
+					label="Earn rate (points per $1)"
+					hint="How many points a member of this tier earns per $1 of order subtotal. 0 = this tier earns no points."
+				>
+					<Input type="number" step="0.05" min="0" max="10" value={form.multiplier} onChange={set("multiplier")} required />
 				</Field>
 				<Field label="Sort order" hint="Lower = earlier in the ladder. Used for display and tie-break.">
 					<Input type="number" step="1" value={form.sort_order} onChange={set("sort_order")} />

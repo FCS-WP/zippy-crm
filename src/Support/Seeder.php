@@ -7,6 +7,7 @@ use ZippyCrm\Models\PointsLedger;
 use ZippyCrm\Models\PointsSummary;
 use ZippyCrm\Models\Voucher;
 use ZippyCrm\Models\VoucherClaim;
+use ZippyCrm\Models\VoucherCode;
 use ZippyCrm\Services\PointsEngine;
 use ZippyCrm\Services\VoucherService;
 
@@ -377,12 +378,62 @@ final class Seeder {
 				'expires_at' => '2024-01-01 00:00:00',
 				'publish' => true, // we publish then it auto-filters as expired by SQL clock check
 			],
+			[
+				// Multi-code campaign: 3 admin-typed codes, each usable once.
+				// `code` here is the placeholder/master code on the parent row;
+				// the customer-facing codes are the three in `codes` below.
+				'code' => 'QA-MC-3SLOT', 'title' => 'QA — multi-code 20% off (3 slots)',
+				'description' => 'Multi-code campaign — each user gets their own unique code; only 3 customers total can claim.',
+				'discount_type' => 'percent', 'discount_value' => 20,
+				'min_order_amount' => 0, 'max_uses' => 3,
+				'expires_at' => gmdate( 'Y-m-d H:i:s', time() + 60 * DAY_IN_SECONDS ),
+				'distribution_mode' => 'multi_code_public',
+				'slots' => 3,
+				'codes' => [ 'QAMC-AAA111', 'QAMC-BBB222', 'QAMC-CCC333' ],
+				'publish' => true,
+			],
+			[
+				// Tier-restricted (gold + vip only). qa-free-1 / qa-silver-1
+				// must NOT see this card; qa-gold-1 / qa-vip-1 must see it.
+				'code' => 'QA-GOLDVIP-30', 'title' => 'QA — Gold/VIP exclusive 30%',
+				'description' => 'Tier-restricted: only Gold and VIP members may claim.',
+				'discount_type' => 'percent', 'discount_value' => 30,
+				'min_order_amount' => 0, 'max_uses' => 0,
+				'expires_at' => gmdate( 'Y-m-d H:i:s', time() + 60 * DAY_IN_SECONDS ),
+				'audience_mode' => 'tier',
+				'allowed_tiers' => [ 'gold', 'vip' ],
+				'publish' => true,
+			],
 		];
 
 		$admin_id   = self::admin_id();
 		$voucher_ids = [];
 		foreach ( $vouchers as $v ) {
-			global $wpdb;
+			$is_multi = ( $v['distribution_mode'] ?? '' ) === 'multi_code_public';
+
+			// Multi-code campaigns own a children table (crm_voucher_codes) plus
+			// one WC coupon per code. Re-seeding via Voucher::update() would skip
+			// all of that — easier to require a clean slate for the multi-code
+			// fixture. If it already exists, leave it alone; QA can call reset()
+			// to refresh.
+			if ( $is_multi ) {
+				$existing = self::find_multi_voucher_by_qa_marker( $v['title'] );
+				if ( $existing ) {
+					$voucher_ids[ $v['code'] ] = (int) $existing['id'];
+					continue;
+				}
+				$result = VoucherService::create_draft( $v, $admin_id );
+				if ( $result instanceof \WP_Error ) {
+					continue;
+				}
+				$id = (int) $result['id'];
+				if ( $v['publish'] ) {
+					VoucherService::publish( $id );
+				}
+				$voucher_ids[ $v['code'] ] = $id;
+				continue;
+			}
+
 			$existing = Voucher::find_by_code( $v['code'] );
 			if ( $existing ) {
 				$id = (int) $existing['id'];
@@ -447,10 +498,16 @@ final class Seeder {
 			}
 		}
 
+		// Match seeded vouchers by:
+		//   - SEED_PREFIX-prefixed codes (random `zcseed_*` voucher batches)
+		//   - QA- prefixed codes (predictable QC fixtures)
+		//   - ZC_MULTI_-prefixed codes (multi-code QC fixture's placeholder code)
 		$voucher_ids = $wpdb->get_col( $wpdb->prepare(
-			'SELECT id FROM ' . $wpdb->prefix . Voucher::TABLE . ' WHERE code LIKE %s OR code LIKE %s',
+			'SELECT id FROM ' . $wpdb->prefix . Voucher::TABLE
+			. ' WHERE code LIKE %s OR code LIKE %s OR code LIKE %s',
 			$wpdb->esc_like( strtoupper( self::SEED_PREFIX ) ) . '%',
-			$wpdb->esc_like( 'QA-' ) . '%'
+			$wpdb->esc_like( 'QA-' ) . '%',
+			$wpdb->esc_like( 'ZC_MULTI_' ) . '%'
 		) );
 
 		// Clear claims rows for our seeded vouchers — direct delete avoids a
@@ -459,10 +516,46 @@ final class Seeder {
 		$vouchers_deleted = 0;
 		foreach ( (array) $voucher_ids as $id ) {
 			$id = (int) $id;
+
+			// Multi-code campaigns mint one WC coupon per code — clean those
+			// up too, otherwise re-seeding hits "coupon code already exists".
+			$child_codes = $wpdb->get_col( $wpdb->prepare(
+				'SELECT code FROM ' . $wpdb->prefix . VoucherCode::TABLE . ' WHERE voucher_id = %d',
+				$id
+			) );
+			foreach ( (array) $child_codes as $code ) {
+				$coupon_id = wc_get_coupon_id_by_code( (string) $code );
+				if ( $coupon_id ) {
+					wp_delete_post( (int) $coupon_id, true );
+				}
+			}
+			VoucherCode::delete_for_voucher( $id );
+
+			// Single-code parent coupon (multi-code parent code is the placeholder
+			// `ZC_MULTI_*` which is never minted as a WC coupon, so this is a no-op
+			// for those — safe to call unconditionally).
+			$parent = Voucher::find( $id );
+			if ( $parent && ! empty( $parent['code'] ) ) {
+				$coupon_id = wc_get_coupon_id_by_code( (string) $parent['code'] );
+				if ( $coupon_id ) {
+					wp_delete_post( (int) $coupon_id, true );
+				}
+			}
+
 			$wpdb->delete( $claims_table, [ 'voucher_id' => $id ], [ '%d' ] );
 			if ( Voucher::delete( $id ) ) {
 				$vouchers_deleted++;
 			}
+		}
+
+		// Flush WC's coupon-code → ID cache. wp_delete_post() removes the
+		// posts but doesn't invalidate the cached lookup, so a follow-up
+		// seed_qc_fixtures() ends up doing `new WC_Coupon($staleId)` on a
+		// ghost ID and saves the new coupon with default fields (amount=0,
+		// type=fixed_cart). Found this on 2026-05-10 after multi-code coupons
+		// kept publishing as $0 fixed_cart in QA fixtures.
+		if ( class_exists( '\WC_Cache_Helper' ) ) {
+			\WC_Cache_Helper::invalidate_cache_group( 'coupons' );
 		}
 
 		return [ 'users' => $users_deleted, 'vouchers' => $vouchers_deleted ];
@@ -487,6 +580,27 @@ final class Seeder {
 	private static function admin_id(): int {
 		$admins = get_users( [ 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ] );
 		return ! empty( $admins ) ? (int) $admins[0] : 0;
+	}
+
+	/**
+	 * Multi-code vouchers store a generated `ZC_MULTI_*` placeholder in the
+	 * `code` column; the human-readable identifier we use to recognise the
+	 * QC fixture is the title. Lookup is title-only because the QC fixture
+	 * titles all start with "QA — " and are unique among seeded data.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	private static function find_multi_voucher_by_qa_marker( string $title ): ?array {
+		global $wpdb;
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT * FROM ' . $wpdb->prefix . Voucher::TABLE
+				. " WHERE title = %s AND distribution_mode = 'multi_code_public' LIMIT 1",
+				$title
+			),
+			ARRAY_A
+		);
+		return $row ?: null;
 	}
 
 	private static function pick( array $arr ): string {

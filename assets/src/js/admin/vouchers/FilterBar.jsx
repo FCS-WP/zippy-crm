@@ -1,4 +1,4 @@
-import { Input } from "@/js/shared/ui/input.jsx";
+import { SearchInput } from "@/js/shared/components/SearchInput.jsx";
 
 const STATUSES = [
 	{ key: "",        label: "All"     },
@@ -8,6 +8,10 @@ const STATUSES = [
 	{ key: "expired", label: "Expired" },
 ];
 
+/**
+ * Vouchers filter row. Status stays as pill-tabs (small enum, looks tidy);
+ * search is the shared debounced SearchInput.
+ */
 export function FilterBar({ status, onStatus, search, onSearch }) {
 	return (
 		<div className="zc-flex zc-flex-col zc-gap-3 md:zc-flex-row md:zc-items-center md:zc-justify-between">
@@ -31,13 +35,12 @@ export function FilterBar({ status, onStatus, search, onSearch }) {
 					);
 				})}
 			</div>
-			<div className="zc-w-full md:zc-w-72">
-				<Input
-					placeholder="Search code or title…"
-					value={search}
-					onChange={(e) => onSearch(e.target.value)}
-				/>
-			</div>
+			<SearchInput
+				className="zc-w-full md:zc-w-72"
+				placeholder="Search code or title…"
+				value={search}
+				onChange={onSearch}
+			/>
 		</div>
 	);
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApiMutation } from "@/js/shared/hooks/useApi.js";
 import { Button } from "@/js/shared/ui/button.jsx";
+import { isItemLevelType } from "@/js/shared/utils/format.js";
 import { GeneralSection }      from "./sections/GeneralSection.jsx";
 import { LimitsSection }       from "./sections/LimitsSection.jsx";
 import { RestrictionsSection } from "./sections/RestrictionsSection.jsx";
@@ -9,12 +10,17 @@ import { TimeSection }         from "./sections/TimeSection.jsx";
 
 const EMPTY = {
 	// general
+	distribution_mode: "single_code",
 	code: "",
 	title: "",
 	description: "",
 	discount_type: "percent",
 	discount_value: "",
 	free_shipping: false,
+	// multi-code only — UI-side state, transformed before submit
+	slots: "",
+	codes_text: "",
+	code_prefix: "",
 	// restrictions
 	min_order_amount: "",
 	max_order_amount: "",
@@ -24,7 +30,11 @@ const EMPTY = {
 	excluded_product_ids: [],
 	product_categories: [],
 	excluded_product_categories: [],
+	// Audience targeting (mutually exclusive). The RestrictionsSection
+	// AudienceField clears the inactive list when mode changes.
+	audience_mode: "public",
 	email_restrictions: [],
+	allowed_tiers: [],
 	// limits
 	max_uses: "",
 	usage_limit_per_user: "",
@@ -63,7 +73,15 @@ function isoToMysql(iso) {
 function fromRow(row) {
 	if (!row) return EMPTY;
 	return {
-		code: row.code ?? "",
+		distribution_mode: row.distribution_mode ?? "single_code",
+		// Multi-code rows store a synthetic ZC_MULTI_* placeholder in `code` —
+		// blank it for the UI so admins don't see the internal placeholder.
+		code: (row.distribution_mode === "multi_code_public") ? "" : (row.code ?? ""),
+		// Multi-code create-only fields. Always empty when editing — the form
+		// shows a read-only summary instead of input fields.
+		slots: "",
+		codes_text: "",
+		code_prefix: "",
 		title: row.title ?? "",
 		description: row.description ?? "",
 		discount_type: row.discount_type ?? "percent",
@@ -78,7 +96,9 @@ function fromRow(row) {
 		excluded_product_ids:        Array.isArray(row.excluded_product_ids)        ? row.excluded_product_ids        : [],
 		product_categories:          Array.isArray(row.product_categories)          ? row.product_categories          : [],
 		excluded_product_categories: Array.isArray(row.excluded_product_categories) ? row.excluded_product_categories : [],
+		audience_mode:               row.audience_mode ?? "public",
 		email_restrictions:          Array.isArray(row.email_restrictions)          ? row.email_restrictions          : [],
+		allowed_tiers:               Array.isArray(row.allowed_tiers)               ? row.allowed_tiers               : [],
 
 		max_uses:               row.max_uses               ?? "",
 		usage_limit_per_user:   row.usage_limit_per_user   ?? "",
@@ -106,7 +126,15 @@ const TABS = [
  */
 function countMissingRequired(form, isEdit) {
 	let n = 0;
-	if (!isEdit && !form.code?.trim())  n++;
+	const isMulti = form.distribution_mode === "multi_code_public";
+	if (!isEdit) {
+		// Single-code requires the Code field; multi-code requires Slots.
+		if (isMulti) {
+			if (!form.slots || Number(form.slots) <= 0) n++;
+		} else {
+			if (!form.code?.trim()) n++;
+		}
+	}
 	if (!form.title?.trim())            n++;
 	if (!form.discount_type)            n++;
 	const dv = form.discount_value;
@@ -134,6 +162,31 @@ export function VoucherForm({ row, onClose }) {
 		e.preventDefault();
 		setError(null);
 
+		// Mirror VoucherService::validate_payload's item-level guard so the
+		// admin sees the issue inline rather than a 400 from the server.
+		if (
+			!isEdit &&
+			isItemLevelType(form.discount_type) &&
+			(form.product_ids || []).length === 0 &&
+			(form.product_categories || []).length === 0
+		) {
+			setTab("restrictions");
+			setError("Item-level discounts must restrict to specific products or categories. Pick at least one on the Restrictions tab.");
+			return;
+		}
+
+		// Audience-mode mirrors of the same guard.
+		if (form.audience_mode === "tier" && (form.allowed_tiers || []).length === 0) {
+			setTab("restrictions");
+			setError("Pick at least one membership tier on the Restrictions tab, or switch the audience back to Public.");
+			return;
+		}
+		if (form.audience_mode === "email" && (form.email_restrictions || []).length === 0) {
+			setTab("restrictions");
+			setError("Pick at least one customer or email on the Restrictions tab, or switch the audience back to Public.");
+			return;
+		}
+
 		const payload = {
 			// general
 			title:          form.title.trim(),
@@ -150,7 +203,12 @@ export function VoucherForm({ row, onClose }) {
 			excluded_product_ids:        form.excluded_product_ids,
 			product_categories:          form.product_categories,
 			excluded_product_categories: form.excluded_product_categories,
-			email_restrictions:          form.email_restrictions,
+			// Audience targeting — always send the mode + only the matching list.
+			// The form's mode-switch handler already cleared the inactive list,
+			// but be defensive here so a stale state can't accidentally save mixed.
+			audience_mode:      form.audience_mode || "public",
+			email_restrictions: form.audience_mode === "email" ? form.email_restrictions : [],
+			allowed_tiers:      form.audience_mode === "tier"  ? form.allowed_tiers      : [],
 			// limits
 			max_uses:               Number(form.max_uses)               || 0,
 			usage_limit_per_user:   Number(form.usage_limit_per_user)   || 0,
@@ -161,7 +219,25 @@ export function VoucherForm({ row, onClose }) {
 			allowed_hours: form.allowed_hours,
 		};
 		if (!isEdit) {
-			payload.code = form.code.trim().toUpperCase();
+			const isMulti = form.distribution_mode === "multi_code_public";
+			payload.distribution_mode = form.distribution_mode || "single_code";
+			if (isMulti) {
+				payload.slots = Number(form.slots) || 0;
+				const typedCodes = (form.codes_text || "")
+					.split(/\r?\n/)
+					.map((s) => s.trim().toUpperCase())
+					.filter(Boolean);
+				if (typedCodes.length > 0) {
+					payload.codes = typedCodes;
+				}
+				const prefix = (form.code_prefix || "").trim().toUpperCase();
+				if (prefix) {
+					payload.code_prefix = prefix;
+				}
+				// Don't send `code` — server generates the ZC_MULTI_* placeholder.
+			} else {
+				payload.code = form.code.trim().toUpperCase();
+			}
 		}
 
 		mutation.mutate(payload, {

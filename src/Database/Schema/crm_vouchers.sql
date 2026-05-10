@@ -10,6 +10,23 @@
 -- allowed_hours shape (when not null):
 --   {"days":[0..6],"from_minute":0..1439,"to_minute":1..1440}
 -- Site timezone applies. NULL = always available.
+--
+-- v1.10.0 added distribution_mode for multi-code voucher campaigns:
+--   'single_code'       — legacy. crm_vouchers.code is the master code.
+--   'multi_code_public' — N rows in crm_voucher_codes; each customer gets a
+--                         unique single-use code on claim. crm_vouchers.code
+--                         holds a synthetic placeholder (`ZC_MULTI_<id>`) so
+--                         the existing NOT NULL + UNIQUE on `code` keeps
+--                         working — never used as a real WC coupon code.
+--
+-- v1.11.0 added audience targeting (mutually exclusive with email_restrictions):
+--   audience_mode = 'public' — anyone may claim (default).
+--   audience_mode = 'email'  — restricted to email_restrictions list.
+--   audience_mode = 'tier'   — restricted to allowed_tiers list (JSON of tier slugs).
+-- These three modes are mutually exclusive: VoucherService rejects any payload
+-- that mixes email + tier restriction. The existing email_restrictions column
+-- remains the source of truth for mode='email'; allowed_tiers is the new column
+-- for mode='tier'. Public mode leaves both columns NULL/empty.
 CREATE TABLE {prefix}crm_vouchers (
 	id               BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
 	code             VARCHAR(50)      NOT NULL,
@@ -32,6 +49,9 @@ CREATE TABLE {prefix}crm_vouchers (
 	product_categories          TEXT  NULL,
 	excluded_product_categories TEXT  NULL,
 	allowed_hours               TEXT  NULL,
+	distribution_mode  VARCHAR(20)    NOT NULL DEFAULT 'single_code',
+	audience_mode      VARCHAR(16)    NOT NULL DEFAULT 'public',
+	allowed_tiers               TEXT  NULL,
 	status           VARCHAR(20)      NOT NULL DEFAULT 'draft',
 	starts_at        DATETIME         NULL,
 	expires_at       DATETIME         NULL,

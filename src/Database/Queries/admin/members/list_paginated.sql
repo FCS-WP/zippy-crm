@@ -31,5 +31,5 @@ LEFT   JOIN {prefix}crm_points_summary s ON s.user_id = m.user_id
 WHERE  ( %s = '__all__' OR m.membership_level = %s )
   AND  ( %s = '__all__' OR m.status = %s )
   AND  ( %s = '__all__' OR ( u.user_login LIKE %s OR u.user_email LIKE %s OR u.display_name LIKE %s ) )
-ORDER  BY m.id DESC
+ORDER  BY {order_by}
 LIMIT  %d OFFSET %d

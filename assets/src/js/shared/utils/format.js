@@ -24,3 +24,18 @@ export function dateTime(iso) {
 export function percent(value, fractionDigits = 0) {
 	return `${(Number(value) || 0).toFixed(fractionDigits)}%`;
 }
+
+/**
+ * True for any discount type that should be rendered with a `%` suffix
+ * (cart-level or item-level percent). Mirrors `Voucher::PERCENT_DISCOUNT_TYPES`
+ * on the PHP side. Use this instead of `t === "percent"` so item-level percent
+ * vouchers render correctly.
+ */
+export function isPercentType(t) {
+	return t === "percent" || t === "percent_product";
+}
+
+/** True for any item-level (per-line) discount type. */
+export function isItemLevelType(t) {
+	return t === "fixed_product" || t === "percent_product";
+}

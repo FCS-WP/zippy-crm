@@ -3,6 +3,7 @@ import { Switch } from "@/js/shared/ui/switch.jsx";
 import { CatalogPickerField } from "./CatalogPickerField.jsx";
 import { EmailRestrictionsField } from "./EmailRestrictionsField.jsx";
 import { Field } from "./Field.jsx";
+import { TierRestrictionField } from "./TierRestrictionField.jsx";
 
 export function RestrictionsSection({ form, set, setForm }) {
 	return (
@@ -82,12 +83,95 @@ export function RestrictionsSection({ form, set, setForm }) {
 				/>
 			</Field>
 
-			<Field label="Allowed customer emails">
-				<EmailRestrictionsField
-					value={form.email_restrictions ?? []}
-					onChange={(v) => setForm((f) => ({ ...f, email_restrictions: v }))}
-				/>
-			</Field>
+			<AudienceField form={form} setForm={setForm} />
 		</div>
+	);
+}
+
+/**
+ * Audience selector — mutually exclusive between Public / Specific customers /
+ * Membership tiers. Switching mode clears the other restriction column so the
+ * stored shape always matches the chosen mode.
+ */
+function AudienceField({ form, setForm }) {
+	const audience_mode = form.audience_mode ?? "public";
+
+	const setMode = (mode) => {
+		setForm((f) => ({
+			...f,
+			audience_mode: mode,
+			// Clear the inactive list so we never persist a mixed shape.
+			email_restrictions: mode === "email" ? (f.email_restrictions ?? []) : [],
+			allowed_tiers:      mode === "tier"  ? (f.allowed_tiers      ?? []) : [],
+		}));
+	};
+
+	return (
+		<div className="zc-space-y-3 zc-rounded-md zc-border zc-border-zinc-200 zc-bg-zinc-50/60 zc-p-4">
+			<div>
+				<label className="zc-text-sm zc-font-medium zc-text-zinc-900">Audience</label>
+				<p className="zc-mt-1 zc-text-xs zc-text-zinc-500">
+					Who can see and claim this voucher. Pick one — these are mutually exclusive.
+				</p>
+			</div>
+
+			<div className="zc-grid zc-grid-cols-1 zc-gap-2 sm:zc-grid-cols-3">
+				<AudienceRadio
+					checked={audience_mode === "public"}
+					onChange={() => setMode("public")}
+					label="Public"
+					hint="Any customer can claim."
+				/>
+				<AudienceRadio
+					checked={audience_mode === "email"}
+					onChange={() => setMode("email")}
+					label="Specific customers"
+					hint="Pick individual customers or guest emails."
+				/>
+				<AudienceRadio
+					checked={audience_mode === "tier"}
+					onChange={() => setMode("tier")}
+					label="Membership tiers"
+					hint="Restrict to one or more tiers (e.g. Gold + VIP)."
+				/>
+			</div>
+
+			{audience_mode === "email" ? (
+				<div className="zc-pt-1">
+					<EmailRestrictionsField
+						value={form.email_restrictions ?? []}
+						onChange={(v) => setForm((f) => ({ ...f, email_restrictions: v }))}
+					/>
+				</div>
+			) : null}
+
+			{audience_mode === "tier" ? (
+				<div className="zc-pt-1">
+					<TierRestrictionField
+						value={form.allowed_tiers ?? []}
+						onChange={(v) => setForm((f) => ({ ...f, allowed_tiers: v }))}
+					/>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function AudienceRadio({ checked, onChange, label, hint }) {
+	return (
+		<label
+			className={[
+				"zc-flex zc-cursor-pointer zc-flex-col zc-rounded-md zc-border zc-px-3 zc-py-2 zc-text-sm zc-transition",
+				checked
+					? "zc-border-zinc-900 zc-bg-white zc-shadow-sm"
+					: "zc-border-zinc-300 zc-bg-white hover:zc-border-zinc-400",
+			].join(" ")}
+		>
+			<div className="zc-flex zc-items-center zc-gap-2">
+				<input type="radio" checked={checked} onChange={onChange} className="zc-shrink-0" />
+				<span className="zc-font-medium zc-text-zinc-900">{label}</span>
+			</div>
+			<span className="zc-mt-1 zc-text-xs zc-text-zinc-500">{hint}</span>
+		</label>
 	);
 }

@@ -23,7 +23,9 @@ use ZippyCrm\Controllers\Rest\MembershipController;
 use ZippyCrm\Controllers\Rest\NotificationsController;
 use ZippyCrm\Controllers\Rest\PointsController;
 use ZippyCrm\Controllers\Rest\ReportsController;
+use ZippyCrm\Controllers\Rest\SettingsController;
 use ZippyCrm\Controllers\Rest\TiersController;
+use ZippyCrm\Controllers\Rest\UsersController;
 use ZippyCrm\Controllers\Rest\VouchersController;
 
 return [
@@ -175,6 +177,18 @@ return [
 		'auth'    => 'manage_woocommerce',
 		'args'    => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
 	],
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/vouchers/(?P<id>\d+)/codes',
+		'handler' => [ VouchersController::class, 'admin_list_codes' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [
+			'id'       => [ 'type' => 'integer', 'required' => true ],
+			'status'   => [ 'type' => 'string',  'default'  => '' ],
+			'page'     => [ 'type' => 'integer', 'default'  => 1 ],
+			'per_page' => [ 'type' => 'integer', 'default'  => 50 ],
+		],
+	],
 
 	// -------- Reports (admin) --------
 	[
@@ -231,6 +245,20 @@ return [
 		'path'    => '/admin/points/recalculate-all',
 		'handler' => [ PointsController::class, 'admin_recalculate_all' ],
 		'auth'    => 'manage_woocommerce',
+	],
+
+	// -------- Users (admin) — every non-admin WP user, with CRM coverage --------
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/users',
+		'handler' => [ UsersController::class, 'admin_list' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [
+			'search'         => [ 'type' => 'string',  'default' => '' ],
+			'has_membership' => [ 'type' => 'string',  'default' => '' ],
+			'page'           => [ 'type' => 'integer', 'default' => 1 ],
+			'per_page'       => [ 'type' => 'integer', 'default' => 25 ],
+		],
 	],
 
 	// -------- Members (admin) --------
@@ -325,6 +353,20 @@ return [
 		'args'    => [ 'slug' => [ 'type' => 'string', 'required' => true ] ],
 	],
 
+	// -------- Site-wide Settings (admin) --------
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/settings/points',
+		'handler' => [ SettingsController::class, 'get_points' ],
+		'auth'    => 'manage_woocommerce',
+	],
+	[
+		'method'  => 'PUT',
+		'path'    => '/admin/settings/points',
+		'handler' => [ SettingsController::class, 'update_points' ],
+		'auth'    => 'manage_woocommerce',
+	],
+
 	// -------- Catalog lookup (admin, for voucher product/category picker) --------
 	[
 		'method'  => 'GET',
@@ -370,6 +412,8 @@ return [
 			'event'     => [ 'type' => 'string',  'default' => '' ],
 			'actor_id'  => [ 'type' => 'integer', 'default' => 0 ],
 			'target_id' => [ 'type' => 'integer', 'default' => 0 ],
+			'from'      => [ 'type' => 'string',  'default' => '' ],
+			'to'        => [ 'type' => 'string',  'default' => '' ],
 			'page'      => [ 'type' => 'integer', 'default' => 1 ],
 			'per_page'  => [ 'type' => 'integer', 'default' => 25 ],
 		],
