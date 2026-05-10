@@ -49,6 +49,31 @@ final class VouchersController {
 		] );
 	}
 
+	/**
+	 * History view: used + expired + revoked claims, paginated. Customer-facing
+	 * "My Claims → History" sub-tab. Default 50 per page; client can override.
+	 */
+	public static function list_my_claims_history( \WP_REST_Request $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return RestResponse::error( 'unauthorized', 'You must be logged in.', 401 );
+		}
+
+		$per_page = (int) ( $request->get_param( 'per_page' ) ?: 50 );
+		$page     = max( 1, (int) ( $request->get_param( 'page' ) ?: 1 ) );
+		$offset   = ( $page - 1 ) * $per_page;
+
+		$rows  = VoucherClaim::list_history_for_user( $user_id, $per_page, $offset );
+		$total = VoucherClaim::count_history_for_user( $user_id );
+
+		return RestResponse::ok( [
+			'items'    => array_map( [ self::class, 'shape_history_claim' ], $rows ),
+			'total'    => $total,
+			'page'     => $page,
+			'per_page' => $per_page,
+		] );
+	}
+
 	public static function claim( \WP_REST_Request $request ) {
 		$user_id = get_current_user_id();
 		if ( ! $user_id ) {
@@ -391,6 +416,55 @@ final class VouchersController {
 			'used_at'        => DateTimeHelper::mysql_to_iso( $row['used_at'] ?? null ),
 			'expires_at'     => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
 			'order_id'       => $row['order_id'] !== null ? (int) $row['order_id'] : null,
+		];
+	}
+
+	/**
+	 * History row shape. Adds a derived `display_status` ("used" | "expired" |
+	 * "revoked") and `reason_label` so the React side can render without
+	 * re-deriving logic. Status='claimed' rows here are necessarily
+	 * expired-by-date (the SQL only returns those when expires_at <= now).
+	 */
+	private static function shape_history_claim( array $row ): array {
+		$claim_status = (string) $row['claim_status'];
+		$reason       = (string) ( $row['revocation_reason'] ?? '' );
+
+		// display_status collapses the three SQL states into the three UX states.
+		// status='claimed' here only appears for expired-by-date rows.
+		$display_status = $claim_status === 'used'    ? 'used'
+		                : ( $claim_status === 'expired' ? 'revoked' : 'expired' );
+
+		// Human label per reason. Wrapped here so the customer-facing copy
+		// lives next to its data shape and translators have one place to
+		// localize. The empty case ("expired" with no reason) is the
+		// passive "voucher's expiry date passed" path.
+		$reason_label = match ( true ) {
+			$display_status === 'used'                    => null,
+			$reason === 'cascade_coupon'                  => __( 'Voucher removed by admin', 'zippy-crm' ),
+			$reason === 'tier_downgrade'                  => __( 'Tier no longer eligible', 'zippy-crm' ),
+			$reason === 'admin_revoke'                    => __( 'Revoked by admin', 'zippy-crm' ),
+			$display_status === 'expired'                 => __( 'Expired', 'zippy-crm' ),
+			default                                       => __( 'No longer available', 'zippy-crm' ),
+		};
+
+		return [
+			'id'                => (int) $row['claim_id'],
+			'voucher_id'        => (int) $row['voucher_id'],
+			'code'              => (string) $row['code'],
+			'title'             => (string) $row['title'],
+			'description'       => $row['description'] ?? null,
+			// Raw DB status (for debug / future use)
+			'status'            => $claim_status,
+			'revocation_reason' => $reason !== '' ? $reason : null,
+			// Pre-derived for the UI
+			'display_status'    => $display_status,
+			'reason_label'      => $reason_label,
+			'discount_type'     => (string) $row['discount_type'],
+			'discount_value'    => (float) $row['discount_value'],
+			'claimed_at'        => DateTimeHelper::mysql_to_iso( $row['claimed_at'] ?? null ),
+			'used_at'           => DateTimeHelper::mysql_to_iso( $row['used_at'] ?? null ),
+			'expires_at'        => DateTimeHelper::mysql_to_iso( $row['expires_at'] ?? null ),
+			'order_id'          => $row['order_id'] !== null ? (int) $row['order_id'] : null,
 		];
 	}
 

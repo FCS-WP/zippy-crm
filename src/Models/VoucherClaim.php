@@ -75,6 +75,33 @@ final class VoucherClaim {
 		return $rows ?: [];
 	}
 
+	/**
+	 * History view: used + expired + revoked claims for a customer, paginated
+	 * (newest first). Used by the My Account "History" sub-tab.
+	 *
+	 * @return array<int,array<string,mixed>>
+	 */
+	public static function list_history_for_user( int $user_id, int $limit, int $offset ): array {
+		global $wpdb;
+		$limit  = max( 1, min( 200, $limit ) );
+		$offset = max( 0, $offset );
+		$sql    = QueryLoader::query( 'vouchers/list_my_claims_history.sql' );
+		$rows   = $wpdb->get_results(
+			$wpdb->prepare( $sql, $user_id, DateTimeHelper::now_mysql(), $limit, $offset ),
+			ARRAY_A
+		);
+		return $rows ?: [];
+	}
+
+	/** Total number of history rows for "Load more" gating in the UI. */
+	public static function count_history_for_user( int $user_id ): int {
+		global $wpdb;
+		$sql = QueryLoader::query( 'vouchers/count_my_claims_history.sql' );
+		return (int) $wpdb->get_var(
+			$wpdb->prepare( $sql, $user_id, DateTimeHelper::now_mysql() )
+		);
+	}
+
 	/** @return array<string,mixed>|null */
 	public static function find_for_user( int $voucher_id, int $user_id ): ?array {
 		global $wpdb;
