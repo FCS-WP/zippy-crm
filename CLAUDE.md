@@ -11,6 +11,7 @@
 > - [docs/QC_TEST_CASES.md](./docs/QC_TEST_CASES.md) — QA-tester-facing cases (UI only, pre-seeded accounts, pass/fail blocks)
 >
 > **Project rules** (read these too — they apply to every change):
+> - [.claude/rules/git-workflow.md](./.claude/rules/git-workflow.md) — branch + commit + PR conventions
 > - [.claude/rules/file-size.md](./.claude/rules/file-size.md) — 500-line cap, where to split
 > - [.claude/rules/sql-files.md](./.claude/rules/sql-files.md) — SQL goes in `.sql` files, not inline
 > - [.claude/rules/shared-components.md](./.claude/rules/shared-components.md) — reusable React + PHP layers
