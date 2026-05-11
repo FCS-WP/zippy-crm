@@ -233,6 +233,42 @@
 - [x] Menu registration (`Controllers/Admin/AdminMenu`) + 4 mount controllers (stubs)
 - [x] `enqueue_admin` loads `dist/admin.js` on `zippy-crm*` pages — verified by Vouchers panel
 
+### Onboarding wizard (admin first-run guide)
+
+> **Pick because**: admins who land on a feature-rich plugin without a tour click around, miss half the features, and underuse the system. WC, EDD, MailPoet etc. all do a first-run guide for exactly this reason. ~1-2 days to build properly; high payoff in adoption.
+
+- [ ] Activation flag: on `register_activation_hook`, set `zippy_crm_show_onboarding=1` option. Read on `admin_init` — if set AND current user is admin AND not on the onboarding page already, redirect to `/wp-admin/admin.php?page=zippy-crm-onboarding`. Clear the flag after first view so subsequent activations (e.g. version bumps) don't trigger it. Skip when activated via WP-CLI / multisite network-activate (check `wp_doing_cron`, `WP_CLI`, `is_network_admin`).
+- [ ] New admin page: `Controllers/Admin/OnboardingController` rendering `<div id="zippy-crm-admin-onboarding">`; not in the sidebar menu (hidden via `add_submenu_page` with `parent_slug=null` or `remove_submenu_page` after registration).
+- [ ] React entry: `assets/src/js/admin/onboarding/OnboardingPanel.jsx` — full-bleed multi-step guide, not the standard panel chrome.
+- [ ] Step content (proposed flow):
+   1. **Welcome** — what Zippy CRM does (membership, points, vouchers, notifications), prerequisite check (WC active, HPOS enabled, customer accounts allowed)
+   2. **Tiers** — explain the ladder; "Configure your tiers" button → `/admin/zippy-crm-tiers`; show seeded defaults table (Free/Silver/Gold/VIP) so they know they can rename/edit
+   3. **Points** — explain earn rate (per-tier) + redemption (cart-tender model); link to Settings; one-click "set up sensible defaults" button
+   4. **Vouchers** — explain single-code vs multi-code, audience targeting (public/email/tier); "Create your first voucher" CTA → `/admin/zippy-crm-vouchers?action=new`
+   5. **Notifications** — explain opt-in flow; "Send a test email" button (sends a one-off voucher-notification template to admin's email so they verify deliverability)
+   6. **Audit log** — quick mention so admins know it exists for compliance
+   7. **Done** — "You're ready. Drop into Members anytime to see who's signed up."
+- [ ] Step state: stored in `user_meta` per admin (`zippy_crm_onboarding_step`) so they can leave the page and come back. "Skip for now" button on every step; persists `zippy_crm_onboarding_dismissed=1` so it never auto-redirects again for that admin.
+- [ ] **Re-access path**: small "View setup guide" link in the Settings panel header so admins can revisit. Doesn't reset the dismissed flag.
+- [ ] Visual: full-page layout (escape `wrap` constraints), step indicator at top, large illustrative SVGs per step, primary CTA + secondary "Skip" per step. Match the existing Tailwind `zc-` design system.
+- [ ] Test-email step: reuses existing `NotifEngine` template logic; sends to `wp_get_current_user()->user_email` only; bounded by a 1-per-minute rate limit so admins can't spam themselves clicking "Send test" repeatedly.
+- [ ] Mock layer: `GET /admin/onboarding/state` + `PUT /admin/onboarding/state` (current step, dismissed flag) added to `LIVE_ROUTES`.
+- [ ] QC cases: TC-ONB-01 fresh activation triggers redirect, TC-ONB-02 second visit doesn't redirect (flag cleared), TC-ONB-03 admin clicks "Skip for now" → no redirect on next activation, TC-ONB-04 test-email sends to admin's address only, TC-ONB-05 step state persists across logout.
+
+**Design decisions (locked)**:
+- **Per-admin state via `user_meta`**. Each admin who joins gets their own tour; site-wide global rejected because new staff onboarding shouldn't depend on whoever activated the plugin years ago.
+- **Lazy-load inside `admin.js`** (not a separate Vite entry). Matches the Settings / Audit / Users pattern — `App.jsx` switches on `panel === "onboarding"` and React.lazy-imports the OnboardingPanel chunk. One bundle, smaller surface area.
+- **Keep the "send test email" step**. Verifying the notification pipeline pre-launch is exactly what onboarding is for — admins discover SMTP problems before customers do, not after.
+- **Gate on WC being active**. Step 1 hard-fails with "Activate WooCommerce first" if WC is missing; Next button disabled.
+- **Build via existing `scripts/build-release.sh`** — the onboarding chunk gets emitted by Vite as part of `admin.js`'s code split, so the existing `assets/dist` glob in the release script already picks it up. No changes to the build script.
+
+**Execution order** (phases 1→3, see plan for full breakdown):
+1. **Phase 1 — Scaffolding** (~3-4h): hidden admin page + activation redirect + state service + REST endpoints. Checkpoint: deactivate/reactivate lands on a blank React page; state round-trips.
+2. **Phase 2 — Step content** (~4-6h): 7 step components, one at a time. Each step independent. Checkpoint: full end-to-end first-run.
+3. **Phase 3 — Re-access + polish** (~1-2h): "View setup guide" link in Settings; QC test cases written; visual polish on SVGs.
+
+**Cut order if time is short**: drop the test-email step → drop prereq REST endpoint → never drop steps 1/4/7 (they carry adoption value).
+
 ### Members
 - [x] `MembersPanel` React app — list + filter (level/status), search by login/email/name, row actions
 - [ ] CSV export endpoint (`GET /admin/members/export`) — deferred
@@ -360,3 +396,149 @@
 - [ ] Email deliverability test (SPF/DKIM via WP Mail SMTP or equivalent)
 - [ ] Production cron runs via system crontab, not `wp-cron.php`
 - [ ] Rollback plan: deactivate plugin must NOT delete tables (only `delete_plugin` should — and even then, opt-in)
+
+---
+
+## 8. Future features
+
+> Post-launch growth + retention plays. Each item lists why it matters and a rough scope so we can pick from this menu without re-deliberating.
+>
+> Order below is rough priority — top items move the needle most. Pick whichever has the best fit for the current customer base.
+
+### 8.1 Birthday + anniversary rewards (next up)
+
+> **Pick because**: industry-standard, customers love it, drives a reliable December/birthday-month bump. Simplest "big-emotional-impact" feature on this list.
+
+**Anniversary** uses the existing `crm_memberships.joined_at` so customers don't need to do anything; **birthday** is opt-in via a profile field.
+
+- [ ] DB: add `birthday DATE NULL` column to `crm_memberships` (migration via version bump)
+- [ ] Customer profile UI: birthday date field on the Membership tab (optional, edit-only, no validation beyond format)
+- [ ] REST: `PUT /membership/me/birthday` (auth: user, validates date in past + reasonable range)
+- [ ] Admin Settings: configurable reward shape — bonus points amount AND/OR voucher to auto-claim. Same screen as the existing points-blacklist settings.
+- [ ] New `Services/BirthdayService::run_daily()` — finds today's matches in site timezone, dispatches email + reward
+- [ ] New `Hooks/Cron.php` schedule: daily `crm_birthday_anniversary` event
+- [ ] Email templates: `Views/emails/birthday-reward.php` + `anniversary-reward.php` (mirror existing voucher-notification.php — self-contained, table-based, inline styles)
+- [ ] Reward dispatch path: bonus points via `PointsLedger::insert(type='adjust')` OR auto-claim via `VoucherClaim::claim()`
+- [ ] Idempotency: log dispatches in `crm_notification_log` (or a new `crm_event_log`) keyed by `(user_id, event_type, year)` so re-running the cron same-day is a no-op
+- [ ] QC cases: TC-BDAY-01 happy path (birthday today, reward fires), TC-BDAY-02 missing birthday (skip), TC-BDAY-03 idempotent re-run (no double reward), TC-BDAY-04 admin-picked voucher is expired (email fires, reward fails gracefully, logged)
+
+**Design decisions locked**:
+- Birthday is a `DATE`, not `DATETIME`. Compare against site-timezone "today", not UTC.
+- **Grant reward unconditionally**; log email failures separately. The reward is the actual benefit; email is notification.
+- Anniversary is "yearly on `joined_at` month+day" — the customer's nth year as a member.
+- If both birthday AND anniversary fall on the same day, dispatch both (separate emails, separate rewards).
+
+---
+
+### 8.2 Referral program
+
+> **Pick because**: highest growth ceiling of any feature on this list. Single biggest lever for new-customer acquisition driven by existing customers.
+
+- [ ] DB: `crm_referrals` table — referrer_user_id, referee_user_id, referral_code, status (`pending|completed|expired`), first_order_id, created_at
+- [ ] Per-customer unique referral code generated on first My Account visit
+- [ ] Public landing: `/?ref=CODE` writes a cookie or session var
+- [ ] On `woocommerce_created_customer`: if referral cookie present, write the pending row
+- [ ] On first completed order from a referee: flip status to `completed`, grant rewards to BOTH sides (configurable shapes)
+- [ ] Admin Settings: referrer reward (points + bonus voucher), referee reward (welcome voucher)
+- [ ] Customer UI: My Account → Refer friends (share link, see status of pending/completed referrals, total earned from referrals)
+- [ ] Anti-abuse: same-IP detection, minimum first-order amount, 1 reward per referee
+- [ ] QC cases: full happy path (referrer+referee paid), referee-never-pays (no reward), self-referral (rejected), repeat-referral (rejected)
+
+---
+
+### 8.3 Points expiration (FIFO consumption)
+
+> **Pick because**: solves the unbounded-liability accounting problem; creates redemption urgency. Low complexity for high operational value.
+
+- [ ] Schema: add `expires_at DATETIME NULL` to `crm_points_ledger` rows of type `earn` (existing rows backfilled to NULL = never expire)
+- [ ] Admin Settings: "Points expire after N months" (default 12, 0 = never)
+- [ ] On `earn` ledger insert: compute `expires_at` from setting
+- [ ] Spend logic refactor: redemption consumes oldest-first (FIFO) so points expire in the order they were earned
+- [ ] Monthly cron `crm_expire_old_points`: finds expired-but-unconsumed earn entries, inserts compensating `type='expire'` ledger rows, updates summary
+- [ ] Customer UI: "X points expiring on DATE" warning on Points tab when within 30 days
+- [ ] QC: earn → wait → expiry cron → balance correctly reduced; partial consumption respects FIFO
+
+---
+
+### 8.4 Per-tier auto-grant voucher on promotion
+
+> **Pick because**: small build (~half day) that turns the tier system from a passive multiplier into an active reward moment.
+
+- [ ] Admin Tiers panel: optional "On promotion to this tier, auto-claim voucher X" field
+- [ ] Hook `crm_membership_level_changed` (already exists from tier revoker work)
+- [ ] If config has a voucher for the new tier and customer doesn't already have a claim → auto-create one
+- [ ] Email: "Welcome to Gold — here's a $20 voucher"
+- [ ] QC: silver→gold triggers auto-claim; gold→silver doesn't grant Silver's voucher (downgrade ≠ promotion)
+
+---
+
+### 8.5 Customer Lifetime Value on admin Members panel
+
+> **Pick because**: enables data-driven retention campaigns. Pure read query, no new tables.
+
+- [ ] Extend admin members list with: avg order value, days since last order, "at-risk" flag (no order >90 days)
+- [ ] Compute via aggregate query on `wc_orders` (HPOS) joined to `crm_memberships`
+- [ ] Sortable + filterable in the existing admin Members table
+- [ ] No new schema; ~half day
+
+---
+
+### 8.6 Customer segments (saved queries)
+
+> **Pick because**: lets marketing team self-serve targeted campaigns ("send this voucher to all VIP whose last order was 30+ days ago"). Force multiplier for any messaging feature.
+
+- [ ] New `crm_segments` table: name, slug, criteria_json (tier, status, spend range, last_order_age, etc.)
+- [ ] Admin: segment editor UI (criteria builder)
+- [ ] On voucher publish: optional "limit to segment" (audience_mode='segment')
+- [ ] Reuse the existing audience filter pattern from voucher targeting
+- [ ] ~2 days; segment editor is the hard part
+
+---
+
+### 8.7 Bulk admin actions on Members
+
+- [ ] Multi-select on Members table
+- [ ] Bulk: adjust points (+/- N for selected), grant voucher, change tier
+- [ ] Confirmation dialog with row count + reason field
+- [ ] Audit log entries per row, not per bulk action
+- [ ] ~1 day
+
+---
+
+### 8.8 Email open / click tracking
+
+- [ ] Tracking pixel embedded in email templates
+- [ ] Click-through proxy URL `/zippy-crm/v1/track/click?n=NOTIF_ID&u=ENCODED_URL`
+- [ ] New `crm_email_events` table (notif_id, event=open|click, ts, user_agent)
+- [ ] Reports panel: open rate, click rate, claim rate per voucher
+- [ ] Privacy: respect `honor_dnt` setting; aggregate only
+
+---
+
+### 8.9 Wishlist integration
+
+> Depends on which wishlist plugin the store uses. Skip if no wishlist.
+
+- [ ] Detect installed wishlist (WC Wishlists, YITH Wishlist, TI Wishlist)
+- [ ] On voucher publish: if voucher targets a product/category, find users who have wishlisted → notify them specifically
+- [ ] On price-drop or back-in-stock for a wishlisted product: separate notification path (out of scope here)
+- [ ] ~1-2 days depending on plugin
+
+---
+
+### 8.10 SMS notifications channel
+
+- [ ] Settings: SMS provider config (Twilio API key)
+- [ ] Customer notification preferences: `subscribed_voucher_sms`, `subscribed_points_sms` columns on `crm_notif_subs`
+- [ ] Phone validation in profile form
+- [ ] Same `crm_voucher_published` hook → SMS dispatch alongside email if user opted in
+- [ ] Cost-aware batching (Twilio bills per message)
+
+---
+
+### Deferred / situational
+
+- Multi-currency points math (only if store sells in multiple currencies)
+- Mobile app endpoints (existing REST already works for any client)
+- Gamification — badges, levels, streaks (rarely moves revenue)
+- Forum / community integration (out of scope for a loyalty CRM)

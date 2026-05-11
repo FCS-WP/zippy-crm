@@ -54,11 +54,25 @@ export default function SettingsPanel() {
 
 	return (
 		<div className="zc-space-y-6 zc-p-6">
-			<header>
-				<h1 className="zc-text-2xl zc-font-semibold zc-text-zinc-900">Settings</h1>
-				<p className="zc-text-sm zc-text-zinc-500">
-					Site-wide configuration for how points are earned.
-				</p>
+			<header className="zc-flex zc-items-start zc-justify-between zc-gap-4">
+				<div>
+					<h1 className="zc-text-2xl zc-font-semibold zc-text-zinc-900">Settings</h1>
+					<p className="zc-text-sm zc-text-zinc-500">
+						Site-wide configuration for how points are earned.
+					</p>
+				</div>
+				{/*
+				  Re-access path for the first-run onboarding guide. ?revisit=1
+				  tells the orchestrator to reset the step to 1 (without
+				  clearing the dismissed flag — the auto-redirect protection
+				  stays in place; only this explicit click re-enters the tour).
+				*/}
+				<a
+					href="admin.php?page=zippy-crm-onboarding&revisit=1"
+					className="zc-shrink-0 zc-inline-flex zc-items-center zc-gap-1.5 zc-rounded-md zc-border zc-border-zinc-300 zc-bg-white zc-px-3 zc-py-1.5 zc-text-xs zc-font-medium zc-text-zinc-700 hover:zc-bg-zinc-50"
+				>
+					View setup guide
+				</a>
 			</header>
 
 			<EarnRateCard />

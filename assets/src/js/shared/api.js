@@ -35,4 +35,7 @@ export const api = {
 	post:   (path, body)  => request("POST",   path, body),
 	put:    (path, body)  => request("PUT",    path, body),
 	del:    (path)        => request("DELETE", path),
+	// Alias so `useApiMutation("delete", path)` works — matches the HTTP verb name.
+	// The original `del` is kept for callers already using it.
+	delete: (path)        => request("DELETE", path),
 };

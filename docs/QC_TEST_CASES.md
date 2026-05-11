@@ -1020,6 +1020,139 @@ Expected output: only `qa-gold-1` and `qa-vip-1` (and any other Gold/VIP members
 
 ---
 
+## Admin onboarding (TC-ONB)
+
+> **What's covered**: the first-run setup guide that appears the first time an admin activates the plugin. These are admin-side cases — log in as a WordPress admin (not a customer test account).
+>
+> **Setup the dev needs to run before TC-ONB-01**:
+> ```bash
+> wp eval 'delete_option("zippy_crm_ever_activated"); delete_option("zippy_crm_show_onboarding"); delete_user_meta(get_current_user_id(), "_zc_onboarding_step"); delete_user_meta(get_current_user_id(), "_zc_onboarding_dismissed");'
+> ```
+> That resets every flag so the next plugin activation triggers the auto-redirect cleanly.
+
+### TC-ONB-01: Fresh activation triggers the auto-redirect
+
+> **What this tests**: on a brand-new activation, the admin lands on the setup guide automatically — no menu hunt required.
+
+**Steps**
+1. Have the dev run the reset command above.
+2. Go to `/wp-admin/plugins.php`.
+3. Deactivate Zippy CRM, then activate it again.
+4. WordPress redirects to the post-activation screen (usually the plugins list).
+5. Click any admin menu link (e.g. Dashboard).
+
+**Expected**
+- [ ] You land on the Zippy CRM setup guide page — NOT the dashboard
+- [ ] Page header reads "Welcome to Zippy CRM" with a 7-step indicator at the top
+- [ ] Step 1 of 7 is highlighted (filled dark); steps 2-7 are hollow
+- [ ] System check shows three rows (WooCommerce active, HPOS enabled, Customer accounts allowed) — green checks if your env is set up, amber/red warnings otherwise
+- [ ] **Next button is disabled** if WooCommerce isn't active (hard gate); enabled otherwise
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-ONB-02: Second admin page load doesn't redirect again
+
+> **What this tests**: the auto-redirect is one-shot. After it fires once, going to another admin page should land you there normally, not bounce back to the guide.
+
+**Pre-condition:** TC-ONB-01 was run (auto-redirect already fired and consumed the flag).
+
+**Steps**
+1. From the setup guide, navigate to `/wp-admin/` (dashboard) directly via URL or the WP logo.
+2. Click any other top-level menu link (e.g. Posts, Pages, WooCommerce).
+
+**Expected**
+- [ ] You stay on the page you clicked — no bounce back to the setup guide
+- [ ] The Zippy CRM menu sidebar shows the normal items (Members, Tiers, Vouchers, etc.) — **no "Setup Guide" entry**; it's hidden by design
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-ONB-03: Step navigation + "Skip for now"
+
+**Steps**
+1. Go back to the setup guide: `/wp-admin/admin.php?page=zippy-crm-onboarding`.
+2. From step 1, click **Next**.
+3. Step 2 (Membership tiers) loads with a table of seeded tiers.
+4. Click **Next** again → step 3 (Points).
+5. Click **← Back** → returns to step 2.
+6. Click **Skip for now** at the bottom.
+
+**Expected**
+- [ ] Step indicator at the top updates as you navigate (completed steps show a green ✓)
+- [ ] Back button hidden on step 1; visible on steps 2-7
+- [ ] "Skip for now" link is visible at the bottom-right on every step except the last
+- [ ] After clicking Skip, you're redirected to **Zippy CRM → Members** (not the guide, not the dashboard)
+- [ ] If you navigate back to the guide URL, you see a "Setup complete" card with two buttons: "Revisit step N" and "Go to Members"
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-ONB-04: Test email button (Notifications step)
+
+> **What this tests**: the "Send test email" button on step 5 sends a sample voucher email to the current admin's address and surfaces success/failure clearly. Also tests the rate-limit.
+
+**Pre-condition:** Your WP install has working SMTP (WP Mail SMTP plugin or equivalent). On a dev environment without SMTP, the button will return an error — that's also a valid result, just verifies the error path.
+
+**Steps**
+1. Visit the setup guide. If you're on the "Setup complete" card, click **Revisit step 1**, then click Next four times to reach step 5 (Notifications).
+2. Click **Send test email**.
+3. While the spinner is going, click **Send test email** again immediately (before the first response lands).
+4. Wait for the result. Check your admin user's inbox.
+
+**Expected — happy path** (working SMTP)
+- [ ] Button shows a loading spinner; first click returns success: green text "✓ Sent to your.email@example.com. Check your inbox."
+- [ ] Email arrives at the admin's address (may take a minute; check spam folder)
+- [ ] Email subject contains the site name and "Test email from Zippy CRM"
+- [ ] Email body renders the sample voucher card with a 20% discount
+
+**Expected — rate limit**
+- [ ] Clicking again within 60 seconds returns a rose error: "Please wait a moment before sending another test email."
+- [ ] After waiting 60+ seconds, a fresh click succeeds again
+
+**Expected — broken SMTP** (alternative)
+- [ ] Button click returns a rose error: "wp_mail returned false. Check your SMTP configuration."
+- [ ] The footnote below the button mentions checking spam folder + SMTP config
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
+### TC-ONB-05: "View setup guide" re-access from Settings
+
+> **What this tests**: after dismissing, an admin can intentionally re-enter the guide via the Settings panel link. This does NOT re-arm the auto-redirect — it's an explicit one-time visit.
+
+**Pre-condition:** Setup guide was previously completed or dismissed (TC-ONB-03 leaves you in this state).
+
+**Steps**
+1. Go to **Zippy CRM → Settings**.
+2. Look at the top-right of the page header.
+3. Click the **View setup guide** button.
+
+**Expected**
+- [ ] Top-right of Settings shows a "View setup guide" button next to the page title
+- [ ] Clicking it lands on the onboarding page **at step 1** (not the "Setup complete" card)
+- [ ] The URL bar shows `admin.php?page=zippy-crm-onboarding` — the `?revisit=1` param was stripped after consumption (so reloading the page doesn't double-reset)
+- [ ] Navigating away and coming back manually to `admin.php?page=zippy-crm-onboarding` shows the "Setup complete" card again — the revisit was one-shot
+- [ ] Deactivating and re-activating the plugin (dev would need to manually clear `zippy_crm_ever_activated` first to simulate fresh install) auto-redirects again only on a truly fresh install — re-activations of an already-once-activated plugin don't trigger it
+
+**Result:** [ ] Pass [ ] Fail [ ] Blocked
+**Tester / date:**
+**Notes:**
+
+---
+
 ## End-to-end customer journey (TC-E2E)
 
 These cases tie multiple features together. They're the most realistic — what a real customer actually does.

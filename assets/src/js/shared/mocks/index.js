@@ -42,6 +42,10 @@ const LIVE_ROUTES = new Set([
 	"GET /admin/users",
 	"GET /admin/settings/points",
 	"PUT /admin/settings/points",
+	"GET /admin/onboarding/state",
+	"PUT /admin/onboarding/state",
+	"GET /admin/onboarding/prereqs",
+	"POST /admin/onboarding/test-email",
 ]);
 
 // Path prefixes that should hit the real backend (for routes with `{id}` etc).

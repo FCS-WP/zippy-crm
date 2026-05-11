@@ -21,6 +21,7 @@ use ZippyCrm\Controllers\Rest\AuditController;
 use ZippyCrm\Controllers\Rest\CatalogController;
 use ZippyCrm\Controllers\Rest\MembershipController;
 use ZippyCrm\Controllers\Rest\NotificationsController;
+use ZippyCrm\Controllers\Rest\OnboardingController;
 use ZippyCrm\Controllers\Rest\PointsController;
 use ZippyCrm\Controllers\Rest\ReportsController;
 use ZippyCrm\Controllers\Rest\SettingsController;
@@ -370,6 +371,32 @@ return [
 		'method'  => 'PUT',
 		'path'    => '/admin/settings/points',
 		'handler' => [ SettingsController::class, 'update_points' ],
+		'auth'    => 'manage_woocommerce',
+	],
+
+	// -------- Onboarding state (per-admin first-run guide) --------
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/onboarding/state',
+		'handler' => [ OnboardingController::class, 'get_state' ],
+		'auth'    => 'manage_woocommerce',
+	],
+	[
+		'method'  => 'PUT',
+		'path'    => '/admin/onboarding/state',
+		'handler' => [ OnboardingController::class, 'update_state' ],
+		'auth'    => 'manage_woocommerce',
+	],
+	[
+		'method'  => 'GET',
+		'path'    => '/admin/onboarding/prereqs',
+		'handler' => [ OnboardingController::class, 'check_prereqs' ],
+		'auth'    => 'manage_woocommerce',
+	],
+	[
+		'method'  => 'POST',
+		'path'    => '/admin/onboarding/test-email',
+		'handler' => [ OnboardingController::class, 'send_test_email' ],
 		'auth'    => 'manage_woocommerce',
 	],
 
