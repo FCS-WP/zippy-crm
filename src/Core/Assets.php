@@ -142,6 +142,9 @@ final class Assets {
 			'currentUser' => get_current_user_id(),
 			// Account-side CTAs link to the cart for the points-tender flow.
 			'cartUrl'     => function_exists( 'wc_get_cart_url' ) ? esc_url_raw( wc_get_cart_url() ) : '/cart/',
+			// `window.ajaxurl` is admin-only — expose it for theme-specific
+			// frontend refreshers (e.g. ai-zippy's az_get_checkout_totals).
+			'ajaxUrl'     => esc_url_raw( admin_url( 'admin-ajax.php' ) ),
 		];
 	}
 

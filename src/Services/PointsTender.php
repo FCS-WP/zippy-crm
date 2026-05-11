@@ -43,6 +43,14 @@ final class PointsTender {
 	 */
 	public const SESSION_KEY = 'zc_applied_points';
 
+	/**
+	 * One-shot flag set when add_fee auto-clears the apply because a coupon
+	 * covered the full cart. The /applicable response reads it (and deletes
+	 * it) so the React widget can show a single "your points were removed"
+	 * toast without flashing it on every subsequent poll.
+	 */
+	public const USER_META_AUTO_CLEARED = '_zc_applied_auto_cleared';
+
 	/** User meta — primary source of truth for logged-in customers. */
 	public const USER_META_APPLIED = '_zc_applied_points';
 
@@ -73,10 +81,11 @@ final class PointsTender {
 		add_action( 'woocommerce_order_status_completed',  [ self::class, 'settle_for_order' ], 30 );
 		add_action( 'woocommerce_order_refunded',          [ self::class, 'credit_back_on_refund' ], 10, 2 );
 
-		// If the cart empties or order completes, drop the session value so a
-		// new shopping session starts clean.
+		// Use `checkout_order_processed`, not `thankyou`. Webhook gateways
+		// (PayNow, async) never render the thank-you page, so a `_thankyou`
+		// hook would leak the pending tender into the next cart.
 		add_action( 'woocommerce_cart_emptied',          [ self::class, 'clear_session' ] );
-		add_action( 'woocommerce_thankyou',              [ self::class, 'clear_session' ] );
+		add_action( 'woocommerce_checkout_order_processed', [ self::class, 'clear_session' ] );
 	}
 
 	/* ============================================================
@@ -135,13 +144,23 @@ final class PointsTender {
 			);
 		}
 
-		// Clamp to cart total — points can never make the order go below zero.
-		// Only clamp when we can read a non-zero cart. In REST context, WC's
-		// session-bound cart often loads empty (cart_total == 0) even though
-		// the customer has items — see ensure_cart_loaded notes. In that case
-		// trust the user's request and let the fee hook re-clamp at render
-		// time, when WC()->cart is the live cart with items.
-		$cart_total = self::cart_total_for_clamp();
+		// Reject upfront when a coupon already zeroes the cart — without this,
+		// the apply succeeds and add_fee auto-clears it on recalc, which looks
+		// like the button silently did nothing. cart_total_for_clamp() is
+		// post-coupon. In REST context the session cart can load empty even
+		// when the customer has items, so we only fail loudly when both
+		// confirmed (has items AND post-coupon ≤ 0).
+		$cart_total     = self::cart_total_for_clamp();
+		$cart_has_items = function_exists( 'WC' ) && WC()->cart && WC()->cart->get_cart_contents_count() > 0;
+
+		if ( $cart_has_items && $cart_total !== null && $cart_total <= 0.01 ) {
+			return new \WP_Error(
+				'coupon_covers_cart',
+				__( 'A coupon already covers the full total — no points needed.', 'zippy-crm' ),
+				[ 'status' => 400 ]
+			);
+		}
+
 		if ( $cart_total !== null && $cart_total > 0 ) {
 			$dollars = $points / $rate;
 			if ( $dollars > $cart_total ) {
@@ -199,6 +218,10 @@ final class PointsTender {
 		$user_id = $user_id ?? get_current_user_id();
 		if ( $user_id > 0 ) {
 			delete_user_meta( $user_id, self::USER_META_APPLIED );
+			// Also clear the cross-order toast flag — if it was left
+			// over (customer placed order before /applicable polled), it
+			// would surface on the next checkout for an unrelated cart.
+			delete_user_meta( $user_id, self::USER_META_AUTO_CLEARED );
 		}
 		// Best-effort session cleanup.
 		if ( function_exists( 'WC' ) && WC()->session ) {
@@ -207,7 +230,6 @@ final class PointsTender {
 				WC()->session->save_data();
 			}
 		}
-		error_log( sprintf( '[zc-tender] clear_session user=%d meta=%d', $user_id ?? 0, $user_id > 0 ? (int) get_user_meta( $user_id, self::USER_META_APPLIED, true ) : -1 ) );
 	}
 
 	/**
@@ -273,12 +295,6 @@ final class PointsTender {
 		}
 
 		$points = self::get_applied( $user_id );
-		// Diagnostic — remove once tender flow is stable. Tells us whether
-		// the fee hook is bailing correctly after a clear, or whether stale
-		// state is still leaking through.
-		$session_val = ( function_exists( 'WC' ) && WC()->session ) ? (int) WC()->session->get( self::SESSION_KEY, 0 ) : -1;
-		$meta_val    = (int) get_user_meta( $user_id, self::USER_META_APPLIED, true );
-		error_log( sprintf( '[zc-tender] add_fee user=%d session=%d meta=%d resolved=%d action=%s', $user_id, $session_val, $meta_val, $points, $points > 0 ? 'ATTACH' : 'BAIL' ) );
 		if ( $points <= 0 ) {
 			return;
 		}
@@ -289,10 +305,44 @@ final class PointsTender {
 			return;
 		}
 
-		// Re-clamp at recalc time too: the cart may have shrunk since `apply()`.
-		$cart_total = (float) $cart->get_subtotal() + (float) $cart->get_subtotal_tax();
-		if ( $dollars > $cart_total ) {
-			$dollars = floor( $cart_total );
+		// Clamp against post-coupon, not subtotal. WC won't let cart totals
+		// go negative, so $4 of points on top of a 100%-off coupon would
+		// silently burn the customer's points without producing a discount.
+		//
+		// We iterate `get_applied_coupons()` because `get_cart_discount_total()`
+		// is a cached accumulator that's only populated AFTER calculate_totals()
+		// finishes — but `add_fee` runs DURING calculate_totals(), so the
+		// cached value is still 0 even when coupons are clearly attached.
+		$subtotal     = (float) $cart->get_subtotal() + (float) $cart->get_subtotal_tax();
+		$coupon_total = 0.0;
+		foreach ( $cart->get_applied_coupons() as $code ) {
+			$coupon_total += (float) $cart->get_coupon_discount_amount( $code, $cart->display_cart_ex_tax );
+			$coupon_total += (float) $cart->get_coupon_discount_tax_amount( $code );
+		}
+		$post_coupon = max( 0.0, $subtotal - $coupon_total );
+
+		// Full overlap: coupon covers the cart. Clear the apply so
+		// settle_for_order doesn't debit on completion; flag for the toast.
+		if ( $post_coupon <= 0 ) {
+			delete_user_meta( $user_id, self::USER_META_APPLIED );
+			if ( function_exists( 'WC' ) && WC()->session ) {
+				WC()->session->__unset( self::SESSION_KEY );
+			}
+			update_user_meta( $user_id, self::USER_META_AUTO_CLEARED, 1 );
+			return;
+		}
+
+		// Partial overlap: silent clamp matches Shopify/Smile/LoyaltyLion UX.
+		if ( $dollars > $post_coupon ) {
+			$dollars = floor( $post_coupon );
+			$clamped_points = (int) ( $dollars * $rate );
+			if ( $clamped_points > 0 ) {
+				update_user_meta( $user_id, self::USER_META_APPLIED, $clamped_points );
+			} else {
+				delete_user_meta( $user_id, self::USER_META_APPLIED );
+				update_user_meta( $user_id, self::USER_META_AUTO_CLEARED, 1 );
+				return;
+			}
 		}
 
 		$taxable = (bool) apply_filters( 'crm_points_fee_taxable', false, $points, $user_id );
@@ -513,18 +563,13 @@ final class PointsTender {
 	 * ============================================================ */
 
 	/**
-	 * Cart total for the clamp on apply(). Returns null if no cart context
-	 * (e.g. apply called outside of a request that has a cart yet).
+	 * Post-coupon cart total for the apply() clamp. Returns null when no
+	 * cart context (e.g. apply called before any cart exists).
 	 *
-	 * WC's session-stored cart doesn't auto-bootstrap during a REST request —
-	 * the cart is loaded by `wp` action on page renders, not by REST routing.
-	 * We call `wc_load_cart()` explicitly so a `GET /points/applicable` from
-	 * the cart page hydrates the same session cart the customer is looking at.
-	 *
-	 * Subtotal (line items pre-discount) + subtotal-tax — covers the cart's
-	 * value before our fee subtracts. We deliberately don't call
-	 * `$cart->get_total()` here because that would be circular (it includes
-	 * our fee). Subtotal+tax is a safe upper bound.
+	 * Avoids `$cart->get_total()` — that includes our own fee, which would
+	 * be circular. Iterates `get_applied_coupons()` instead of reading
+	 * `get_cart_discount_total()` (see add_fee for why the cached value
+	 * is unreliable mid-recalc).
 	 */
 	private static function cart_total_for_clamp(): ?float {
 		if ( ! function_exists( 'WC' ) ) {
@@ -534,7 +579,19 @@ final class PointsTender {
 		if ( ! WC()->cart ) {
 			return null;
 		}
-		return (float) WC()->cart->get_subtotal() + (float) WC()->cart->get_subtotal_tax();
+		$cart = WC()->cart;
+		// Recalc so accumulators reflect any coupon the customer just
+		// added/removed in the same session.
+		if ( ! empty( $cart->get_cart() ) ) {
+			$cart->calculate_totals();
+		}
+		$subtotal     = (float) $cart->get_subtotal() + (float) $cart->get_subtotal_tax();
+		$coupon_total = 0.0;
+		foreach ( $cart->get_applied_coupons() as $code ) {
+			$coupon_total += (float) $cart->get_coupon_discount_amount( $code, $cart->display_cart_ex_tax );
+			$coupon_total += (float) $cart->get_coupon_discount_tax_amount( $code );
+		}
+		return max( 0.0, $subtotal - $coupon_total );
 	}
 
 	/**
