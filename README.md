@@ -36,6 +36,21 @@ WC's HPOS (High-Performance Order Storage) must be enabled — the plugin declar
 | Vouchers | `/my-account/crm-vouchers/` | Browse admin-published vouchers, claim, copy code (auto-applies if cart is non-empty), my-claims sub-tab |
 | Notifications | `/my-account/crm-notifications/` | Opt-in toggles for voucher + points emails; sticky checkbox on the WC register form |
 | Admin | `wp-admin/admin.php?page=zippy-crm` | Members list, Vouchers CRUD, Points overview, Reports |
+| Documentation | `wp-admin/admin.php?page=zippy-crm-docs` | In-product user guide for store admins (Markdown sources in [docs/guide/](docs/guide/)) |
+
+---
+
+## In-product documentation
+
+The Documentation admin page renders Markdown from [docs/guide/](docs/guide/) — edit a `.md` file and refresh, no rebuild needed. Sidebar groups (Getting started / Features / Reference) are configured in [docs/guide/manifest.php](docs/guide/manifest.php).
+
+**Hidden dev-only page**: there's an "Architecture & integrations" reference for developers ([80-dev-notes.md](docs/guide/80-dev-notes.md)) — covers data model, REST endpoints, hooks, filters, and diagnostic commands. It's flagged `hidden => true` in the manifest so it stays out of the customer-facing sidebar; reach it directly:
+
+```
+/wp-admin/admin.php?page=zippy-crm-docs&doc=dev-notes
+```
+
+Hand the link to anyone who needs the technical detail. To unhide and put it back in the sidebar, drop `'hidden' => true` from its manifest entry.
 
 ---
 
