@@ -38,6 +38,16 @@ Customers redeem points as a **cash-equivalent discount** at checkout. Default: 
 4. Click **Use N pts**. The discount appears in the totals as a **"Points redemption"** fee.
 5. Pay. On order completion, the points are **debited** from their ledger.
 
+### When a coupon and points are used on the same order
+
+Coupons take priority over points. The plugin enforces this automatically so customers can't accidentally lose value:
+
+- **Coupon covers the whole cart** — Any points the customer had applied are silently released back to their balance, and a one-time notice appears in the widget: *"Your applied points were removed — the coupon covered the full total. Your balance was not debited."* If the coupon is added first, trying to apply points returns the error *"A coupon already covers the full total — no points needed."*
+- **Coupon covers part of the cart** — The customer's points apply against whatever's left. If they applied more points than the remaining total can absorb, the plugin silently reduces the apply to fit. No notice — it just works.
+- **Customer removes the coupon later** — The widget refreshes automatically; any error or notice goes away, and the customer can re-apply points normally.
+
+The customer never silently loses points to a coupon: either the points come back to their balance, or they're applied against the remainder. You won't have to manually correct balances in this scenario.
+
 ### Pending vs settled
 
 When a customer clicks "Use", the points are *reserved* but not yet debited:
@@ -46,6 +56,8 @@ When a customer clicks "Use", the points are *reserved* but not yet debited:
 - If they abandon the cart, the reservation expires (~48h) and nothing is debited
 
 The actual ledger debit happens on **`woocommerce_order_status_processing`** (and is idempotent on completed). So a customer who applies 100 points but never pays keeps their 100 points.
+
+This works correctly for **all payment methods**, including PayNow, bank transfer, and other "scan to pay" flows where the customer never sees a thank-you page — the debit fires on the bank's webhook just the same as on a card payment.
 
 ### Refunds
 
