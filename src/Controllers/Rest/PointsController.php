@@ -146,6 +146,36 @@ final class PointsController {
 		// we read the same cart the customer is looking at, not an empty one.
 		PointsTender::ensure_cart_loaded();
 
+		// Self-heal: if the stored apply exceeds what the current cart can
+		// absorb (customer removed items after applying, or applied on a bigger
+		// cart and came back to a smaller one), clamp it back to the real
+		// usable amount. Without this, the widget shows "860 pts applied · $43
+		// off" while add_fee silently caps the actual discount to whatever the
+		// cart total can absorb — confusing math the customer can't reconcile.
+		//
+		// We only re-persist when the value actually changes, so this is a
+		// no-op for the common case.
+		if ( $applied > 0 && function_exists( 'WC' ) && WC()->cart ) {
+			$cart_total_now = (float) WC()->cart->get_subtotal() + (float) WC()->cart->get_subtotal_tax();
+			if ( $cart_total_now > 0 ) {
+				$max_for_cart = (int) ( floor( $cart_total_now ) * $rate );
+				$max_for_bal  = (int) ( floor( $balance / $rate ) * $rate );
+				$ceiling      = min( $max_for_cart, $max_for_bal );
+				if ( $applied > $ceiling ) {
+					// Persist the clamped value so the next request agrees
+					// with us; recalc the cart so add_fee re-attaches the
+					// correct (smaller) fee.
+					$applied = max( 0, $ceiling );
+					if ( $applied > 0 ) {
+						update_user_meta( $user_id, PointsTender::USER_META_APPLIED, $applied );
+					} else {
+						delete_user_meta( $user_id, PointsTender::USER_META_APPLIED );
+					}
+					WC()->cart->calculate_totals();
+				}
+			}
+		}
+
 		// What's the max the user could apply to *this* cart?
 		//
 		// Ideally: clamp by both balance and cart total. In practice, REST
@@ -160,9 +190,29 @@ final class PointsController {
 		// the actual server-side apply() re-clamps against the live cart at
 		// fee-attach time, so a user "applying" more than the cart can
 		// absorb still gets the correct (clamped) result.
+		//
+		// Cart-total computation: prefer get_cart_contents_total() because
+		// it's populated as soon as items exist in the cart (regardless of
+		// whether calculate_totals() has run yet). get_subtotal() is only
+		// reliable AFTER calculate_totals(); on freshly-hydrated REST carts
+		// it returns 0 even when items are present — which is precisely how
+		// the "slider goes to 900 pts on a $13 cart" bug slipped through.
 		$cart_total = 0.0;
 		if ( function_exists( 'WC' ) && WC()->cart ) {
-			$cart_total = (float) WC()->cart->get_subtotal() + (float) WC()->cart->get_subtotal_tax();
+			$cart = WC()->cart;
+			// Force calculation so all totals are populated. Cheap on a
+			// small cart and idempotent on already-calculated ones.
+			if ( ! empty( $cart->get_cart() ) ) {
+				$cart->calculate_totals();
+			}
+			$cart_total = (float) $cart->get_subtotal() + (float) $cart->get_subtotal_tax();
+			// Fallback: if subtotal is still 0 but the cart actually has
+			// items, use cart_contents_total directly. This catches the
+			// path where calculate_totals silently no-ops for a not-yet
+			// hydrated session cart.
+			if ( $cart_total <= 0 && $cart->get_cart_contents_count() > 0 ) {
+				$cart_total = (float) $cart->get_cart_contents_total();
+			}
 		}
 		$max_by_balance = floor( $balance / $rate ) * $rate;
 		$max_by_cart    = $cart_total > 0
@@ -178,7 +228,40 @@ final class PointsController {
 			'cart_total'        => round( $cart_total, 2 ),
 			'redemption_rate'   => $rate,
 			'min_redemption'    => ZIPPY_CRM_MIN_REDEMPTION,
+			// WC checkout order-review HTML fragment, so the React widget can
+			// paste it into the page directly after apply/clear. Bypasses the
+			// jQuery `update_checkout` ping-pong (which is racy under classic
+			// checkout: two strategies fire in parallel and the slower one's
+			// stale-cart response can overwrite the faster one's fresh data).
+			//
+			// Null for callers that don't need it (the GET applicable use case
+			// just powers the slider; only the apply/clear writes need the
+			// table refresh).
+			'order_review_html' => self::render_order_review_fragment(),
 		];
+	}
+
+	/**
+	 * Render the WC checkout order-review HTML fragment using the live cart.
+	 * Mirrors what WC's own `update_order_review` AJAX returns under
+	 * `.woocommerce-checkout-review-order-table`. We compute totals first
+	 * because some session/init paths in REST context leave the cart in a
+	 * partially-calculated state.
+	 *
+	 * Returns null if WC isn't loaded or the function is missing — defensive.
+	 */
+	private static function render_order_review_fragment(): ?string {
+		if ( ! function_exists( 'woocommerce_order_review' ) || ! function_exists( 'WC' ) || ! WC()->cart ) {
+			return null;
+		}
+		// Recalc to ensure fees reflect the just-cleared (or just-applied) state.
+		// add_fee already ran during apply/clear_apply but a second recalc here
+		// is cheap and bulletproof against any caller that forgot to.
+		WC()->cart->calculate_totals();
+
+		ob_start();
+		woocommerce_order_review();
+		return (string) ob_get_clean();
 	}
 
 	/* ============================================================

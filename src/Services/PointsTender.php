@@ -163,25 +163,21 @@ final class PointsTender {
 	/**
 	 * Returns currently-applied points for the user, or 0.
 	 *
-	 * Reads in this order:
-	 *   1. WC session (works in same-request reads + classic page renders)
-	 *   2. User meta (the cross-REST fallback, primary for logged-in users)
+	 * **User meta is the sole source of truth.** Earlier versions consulted
+	 * the WC session first (with user_meta as a fallback) — but WC sessions
+	 * are keyed by session_key, and a logged-in user can have multiple
+	 * WC session rows in `{prefix}woocommerce_sessions` (REST calls + the
+	 * classic checkout page can land on different session_keys). When that
+	 * happens, the DELETE clears one session row while the checkout page
+	 * keeps reading the OTHER, stale row → the "Points redemption" row
+	 * lingers in the order table even after Remove.
 	 *
-	 * The session is the per-request preference because the cart-fee hook
-	 * runs in the page-render context where WC's cart/session are properly
-	 * bound. The user-meta read kicks in for REST endpoints where the
-	 * session is a fresh guest one.
+	 * user_meta is keyed by user_id, so there's exactly one truth per user
+	 * regardless of how many WC sessions exist. WC's `add_fee` callback runs
+	 * in the page-render context where `get_current_user_id()` resolves
+	 * correctly, so we don't lose anything by dropping the session read.
 	 */
 	public static function get_applied( ?int $user_id = null ): int {
-		// Try the WC session first (works during page-render context).
-		if ( function_exists( 'WC' ) && WC()->session ) {
-			$from_session = (int) WC()->session->get( self::SESSION_KEY, 0 );
-			if ( $from_session > 0 ) {
-				return $from_session;
-			}
-		}
-
-		// Fallback to user meta — survives REST's session quirks.
 		$user_id = $user_id ?? get_current_user_id();
 		if ( $user_id <= 0 ) {
 			return 0;
@@ -190,18 +186,28 @@ final class PointsTender {
 	}
 
 	/**
-	 * Clear the applied amount for a user. Wipes both the session and the
-	 * user-meta fallback so a stale meta value doesn't reapply on the next
-	 * cart render.
+	 * Clear the applied amount for a user.
+	 *
+	 * Wipes user_meta (the source of truth) plus best-effort cleans WC's
+	 * session for this user — any session row WE can find via the customer's
+	 * stored session_key gets the SESSION_KEY entry wiped. The session
+	 * cleanup isn't load-bearing for correctness (add_fee reads user_meta),
+	 * but keeping the session tidy avoids confusion if someone debugs by
+	 * inspecting `woocommerce_sessions` rows.
 	 */
 	public static function clear_session( ?int $user_id = null ): void {
-		if ( function_exists( 'WC' ) && WC()->session ) {
-			WC()->session->__unset( self::SESSION_KEY );
-		}
 		$user_id = $user_id ?? get_current_user_id();
 		if ( $user_id > 0 ) {
 			delete_user_meta( $user_id, self::USER_META_APPLIED );
 		}
+		// Best-effort session cleanup.
+		if ( function_exists( 'WC' ) && WC()->session ) {
+			WC()->session->__unset( self::SESSION_KEY );
+			if ( method_exists( WC()->session, 'save_data' ) ) {
+				WC()->session->save_data();
+			}
+		}
+		error_log( sprintf( '[zc-tender] clear_session user=%d meta=%d', $user_id ?? 0, $user_id > 0 ? (int) get_user_meta( $user_id, self::USER_META_APPLIED, true ) : -1 ) );
 	}
 
 	/**
@@ -212,6 +218,12 @@ final class PointsTender {
 	private static function write_state( int $user_id, int $points ): void {
 		if ( function_exists( 'WC' ) && WC()->session ) {
 			WC()->session->set( self::SESSION_KEY, $points );
+			// Same shutdown-race fix as clear_session — force the session to
+			// hit the DB now so the immediate follow-up wc-ajax request sees
+			// the new value, not the previous one.
+			if ( method_exists( WC()->session, 'save_data' ) ) {
+				WC()->session->save_data();
+			}
 		}
 		if ( $user_id > 0 ) {
 			if ( $points > 0 ) {
@@ -232,6 +244,18 @@ final class PointsTender {
 	 * Reads the session value and adds it as a negative fee. tax_status='none'
 	 * makes this a post-tax reduction (gift-card semantics). Stores that need
 	 * to treat points as a discount can filter `crm_points_fee_taxable`.
+	 *
+	 * Scope: redemption is a checkout-only concept (the widget lives there;
+	 * customers commit to the final number when shipping/tax are known). So we
+	 * SKIP attaching the fee when the request is rendering the cart page —
+	 * otherwise customers see a "Points redemption" line on /cart that they
+	 * have no UI to control (the widget isn't rendered there). We DO still
+	 * attach on:
+	 *   - checkout page renders                  (widget present)
+	 *   - update_order_review AJAX               (widget triggered it)
+	 *   - REST /apply, /clear_apply, /applicable (widget initiated)
+	 *   - woocommerce_checkout_create_order      (order finalization)
+	 * The `is_cart()` gate is the only context we deliberately exclude.
 	 */
 	public static function add_fee( $cart ): void {
 		$user_id = get_current_user_id();
@@ -239,7 +263,22 @@ final class PointsTender {
 			return;
 		}
 
+		// Skip cart-page renders. is_cart() is reliable here — it returns true
+		// only during front-end rendering of the cart page (it's a query-flag
+		// check, doesn't depend on session/ajax state). It correctly returns
+		// false during /checkout, update_order_review AJAX, REST calls, and
+		// the checkout-create-order hook chain.
+		if ( function_exists( 'is_cart' ) && is_cart() ) {
+			return;
+		}
+
 		$points = self::get_applied( $user_id );
+		// Diagnostic — remove once tender flow is stable. Tells us whether
+		// the fee hook is bailing correctly after a clear, or whether stale
+		// state is still leaking through.
+		$session_val = ( function_exists( 'WC' ) && WC()->session ) ? (int) WC()->session->get( self::SESSION_KEY, 0 ) : -1;
+		$meta_val    = (int) get_user_meta( $user_id, self::USER_META_APPLIED, true );
+		error_log( sprintf( '[zc-tender] add_fee user=%d session=%d meta=%d resolved=%d action=%s', $user_id, $session_val, $meta_val, $points, $points > 0 ? 'ATTACH' : 'BAIL' ) );
 		if ( $points <= 0 ) {
 			return;
 		}
