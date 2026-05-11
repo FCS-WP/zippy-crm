@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Card } from "@/js/shared/ui/card.jsx";
 import { Badge } from "@/js/shared/ui/badge.jsx";
 import { Button } from "@/js/shared/ui/button.jsx";
@@ -18,16 +19,20 @@ import { date, isItemLevelType, isPercentType, money } from "@/js/shared/utils/f
  *   3. Frees the body for a primary CTA that doesn't span the entire card
  *      width — looks less like a divider, more like a button.
  */
-export function VoucherCard({ voucher }) {
-	const [result, setResult] = useState(null);
+/**
+ * `onClaimed` is called with the claim payload + the voucher metadata when
+ * the claim succeeds. The parent (AvailableList) holds the modal state so
+ * it survives this card unmounting after the available-list refetch removes
+ * the claimed voucher.
+ */
+export function VoucherCard({ voucher, onClaimed }) {
+	const [error, setError] = useState(null);
 
 	const mutation = useApiMutation("post", `/vouchers/${voucher.id}/claim`, {
 		invalidate: ["/vouchers", "/vouchers/claims"],
-		onSuccess: (data) => setResult({ kind: "ok", data }),
-		onError:   (err)  => setResult({ kind: "err", code: err.code, message: err.message }),
+		onSuccess: (data) => { setError(null); onClaimed?.({ ...data, voucher }); },
+		onError:   (err)  => setError(err.message ?? "Could not claim voucher."),
 	});
-
-	const claimed = result?.kind === "ok";
 
 	return (
 		<Card className="zc-flex zc-overflow-hidden">
@@ -63,20 +68,16 @@ export function VoucherCard({ voucher }) {
 				) : null}
 
 				<div className="zc-mt-auto zc-pt-2">
-					{claimed ? (
-						<ClaimedNotice data={result.data} />
-					) : (
-						<Button
-							size="sm"
-							onClick={() => mutation.mutate({})}
-							disabled={mutation.isPending}
-							loading={mutation.isPending}
-						>
-							Claim voucher
-						</Button>
-					)}
-					{result?.kind === "err" ? (
-						<p className="zc-mt-2 zc-text-xs zc-text-rose-700">{result.message}</p>
+					<Button
+						size="sm"
+						onClick={() => mutation.mutate({})}
+						disabled={mutation.isPending}
+						loading={mutation.isPending}
+					>
+						Claim voucher
+					</Button>
+					{error ? (
+						<p className="zc-mt-2 zc-text-xs zc-text-rose-700">{error}</p>
 					) : null}
 				</div>
 			</div>
@@ -110,29 +111,94 @@ function DiscountStub({ voucher }) {
 	);
 }
 
-function ClaimedNotice({ data }) {
+/**
+ * Modal that shows the freshly claimed code. Mounted by AvailableList so it
+ * survives the just-claimed VoucherCard unmounting (cache invalidation
+ * removes it from the available list one tick after the claim succeeds, and
+ * a portal alone doesn't help because React still owns the modal through
+ * the unmounted parent — state has to live higher up the tree). Auto-copies
+ * the code on open so the "click then it disappears" race is impossible —
+ * the code is already in the paste buffer before the user even reads the
+ * dialog.
+ */
+export function ClaimedCodeDialog({ claim, onClose }) {
 	const [copied, setCopied] = useState(false);
+
 	const copy = async () => {
 		try {
-			await navigator.clipboard?.writeText(data.code);
+			await navigator.clipboard?.writeText(claim.code);
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1500);
-		} catch { /* clipboard blocked */ }
+		} catch { /* clipboard blocked — user can still copy manually */ }
 	};
 
-	return (
-		<div className="zc-rounded-md zc-border zc-border-emerald-200 zc-bg-emerald-50 zc-p-2">
-			<p className="zc-text-[10px] zc-font-medium zc-uppercase zc-tracking-wider zc-text-emerald-800">
-				{data.applied_to_cart ? "Applied to your cart" : "Code claimed"}
-			</p>
-			<div className="zc-mt-1.5 zc-flex zc-items-center zc-justify-between zc-gap-2">
-				<code className="zc-rounded zc-border zc-border-emerald-300 zc-bg-white zc-px-1.5 zc-py-0.5 zc-font-mono zc-text-xs zc-font-semibold zc-text-emerald-900">
-					{data.code}
-				</code>
-				<Button size="sm" variant="outline" onClick={copy}>
-					{copied ? "Copied" : "Copy"}
-				</Button>
+	// Best-effort auto-copy on open. Browsers usually allow this since the
+	// modal is opened from a click handler. If it fails (Firefox in some
+	// contexts, iframes), the visible Copy button is the fallback.
+	useEffect(() => {
+		copy();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	useEffect(() => {
+		const onKey = (e) => { if (e.key === "Escape") onClose(); };
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
+
+	return createPortal(
+		<div className="zc-fixed zc-inset-0 zc-z-[100002] zc-flex zc-items-center zc-justify-center zc-p-4">
+			<div onClick={onClose} className="zc-absolute zc-inset-0 zc-bg-zinc-900/40 zc-backdrop-blur-sm" aria-hidden />
+			<div
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="zc-claimed-title"
+				className="zc-relative zc-w-full zc-max-w-md zc-overflow-hidden zc-rounded-xl zc-border zc-border-zinc-200 zc-bg-white zc-shadow-2xl"
+			>
+				<div className="zc-h-1 zc-w-full zc-bg-gradient-to-r zc-from-emerald-500 zc-via-emerald-400 zc-to-emerald-500" />
+				<div className="zc-p-6">
+					<div className="zc-flex zc-items-start zc-gap-3">
+						<CheckIcon />
+						<div className="zc-min-w-0 zc-flex-1">
+							<h3 id="zc-claimed-title" className="zc-text-base zc-font-semibold zc-text-zinc-900">
+								{claim.applied_to_cart ? "Applied to your cart" : "Voucher claimed"}
+							</h3>
+							<p className="zc-mt-0.5 zc-text-sm zc-text-zinc-600">
+								{claim.applied_to_cart
+									? "The discount is now active in your cart."
+									: "Use this code at checkout to redeem your discount."}
+							</p>
+						</div>
+					</div>
+
+					<div className="zc-mt-5 zc-rounded-lg zc-border zc-border-dashed zc-border-emerald-300 zc-bg-emerald-50 zc-px-4 zc-py-4 zc-text-center">
+						<p className="zc-text-[10px] zc-font-medium zc-uppercase zc-tracking-[0.15em] zc-text-emerald-800">
+							{claim.voucher.title}
+						</p>
+						<code className="zc-mt-2 zc-block zc-select-all zc-break-all zc-font-mono zc-text-2xl zc-font-bold zc-tracking-wider zc-text-emerald-900">
+							{claim.code}
+						</code>
+					</div>
+
+					<div className="zc-mt-5 zc-flex zc-items-center zc-justify-end zc-gap-2">
+						<Button type="button" variant="ghost" onClick={onClose}>Close</Button>
+						<Button type="button" onClick={copy}>
+							{copied ? "Copied!" : "Copy code"}
+						</Button>
+					</div>
+				</div>
 			</div>
-		</div>
+		</div>,
+		document.body,
+	);
+}
+
+function CheckIcon() {
+	return (
+		<span className="zc-flex zc-h-9 zc-w-9 zc-shrink-0 zc-items-center zc-justify-center zc-rounded-full zc-bg-emerald-100 zc-text-emerald-700">
+			<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+				<polyline points="20 6 9 17 4 12" />
+			</svg>
+		</span>
 	);
 }
