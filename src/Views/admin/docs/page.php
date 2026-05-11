@@ -190,6 +190,10 @@ $palette = [
 		border-left-color: <?php echo esc_attr( $a500 ); ?>;
 		font-weight: 600;
 	}
+	/* Hide click-focus ring; keep keyboard focus visible for a11y. */
+	.zc-docs-nav-link:focus { outline: none; box-shadow: none; }
+	.zc-docs-nav-link:focus:not(:focus-visible) { outline: none; box-shadow: none; }
+	.zc-docs-nav-link:focus-visible { outline: 2px solid <?php echo esc_attr( $a500 ); ?>; outline-offset: -2px; }
 
 	/* === Content card === */
 	.zc-docs-main {
@@ -227,7 +231,21 @@ $palette = [
 
 	/* === Markdown prose === */
 	.zc-docs-prose { color: #3f3f46; font-size: 14.5px; line-height: 1.7; }
-	.zc-docs-prose > * + * { margin-top: 14px; }
+	/* Sibling spacing. !important because wp-admin resets margins on
+	   table/pre/ul/p with selectors that beat ours on specificity. */
+	.zc-docs-prose > * + * { margin-top: 18px !important; }
+	.zc-docs-prose > p,
+	.zc-docs-prose > ul,
+	.zc-docs-prose > ol,
+	.zc-docs-prose > pre,
+	.zc-docs-prose > table,
+	.zc-docs-prose > blockquote { margin-bottom: 0 !important; }
+	/* Block elements need a touch more breathing room than text-to-text. */
+	.zc-docs-prose > pre + *,
+	.zc-docs-prose > table + *,
+	.zc-docs-prose > ul + *,
+	.zc-docs-prose > ol + *,
+	.zc-docs-prose > blockquote + * { margin-top: 20px !important; }
 	.zc-docs-prose h1 {
 		font-size: 28px;
 		font-weight: 700;
@@ -247,6 +265,9 @@ $palette = [
 		border-bottom: 1px solid #e4e4e7;
 		letter-spacing: -.005em;
 	}
+	/* Headings need extra breathing room — visual weight + h2's bottom
+	   border eat perceived space. */
+	.zc-docs-prose h2 + * { margin-top: 24px; }
 	.zc-docs-prose h3 {
 		font-size: 15.5px;
 		font-weight: 600;
@@ -254,6 +275,7 @@ $palette = [
 		line-height: 1.3;
 		margin-top: 24px;
 	}
+	.zc-docs-prose h3 + * { margin-top: 10px; }
 	.zc-docs-prose h4 {
 		font-size: 12.5px;
 		font-weight: 700;
@@ -263,6 +285,7 @@ $palette = [
 		text-transform: uppercase;
 		letter-spacing: .06em;
 	}
+	.zc-docs-prose h4 + * { margin-top: 8px; }
 	.zc-docs-prose p { color: #3f3f46; }
 	.zc-docs-prose strong { color: #18181b; font-weight: 600; }
 	.zc-docs-prose em { font-style: italic; color: #3f3f46; }
