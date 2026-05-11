@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useApiQuery, useApiMutation } from "@/js/shared/hooks/useApi.js";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/js/shared/ui/card.jsx";
 import { Button } from "@/js/shared/ui/button.jsx";
@@ -6,20 +7,15 @@ import { Skeleton } from "@/js/shared/ui/skeleton.jsx";
 import { money, number } from "@/js/shared/utils/format.js";
 
 /**
- * "Use your points" widget that renders on the WC cart page. Reads the user's
- * balance + cart context from `GET /points/applicable`, lets them slide a
- * value, posts to `POST /points/apply`. The server-side fee hook handles the
- * cart total; we just reflect the stored amount and refresh on success so WC
- * re-renders the totals.
+ * "Use your points" widget. Reads cart context from /points/applicable and
+ * commits via /points/apply | /points/clear.
  *
- * Design notes:
- *   - We DO NOT optimistically update the slider. The server clamps to the
- *     current cart total and returns the resolved amount; we display that
- *     as authoritative so the UI never shows a value the cart can't honor.
- *   - "Use" / "Remove" are explicit clicks, not auto-apply on slide. Avoids
- *     spamming /apply with every slider tick.
+ * Server is authoritative — we never optimistically render a value that may
+ * not survive the cart's own clamping. Apply/Remove are explicit clicks so
+ * we don't spam /apply on every slider tick.
  */
 export function PointsTenderWidget() {
+	const qc = useQueryClient();
 	const summary = useApiQuery("/points/applicable");
 
 	const apply = useApiMutation("post", "/points/apply", {
@@ -32,9 +28,39 @@ export function PointsTenderWidget() {
 		onSuccess: (data) => triggerCartRefresh(data?.order_review_html),
 	});
 
+	// Refetch on cart-fragment changes. We listen to both events because
+	// templates differ: the ai-zippy theme fires `update_checkout` from its
+	// coupon flow, classic WC fires `updated_checkout` after its AJAX.
+	useEffect(() => {
+		const $ = window.jQuery;
+		if (typeof $ !== "function") return;
+		const onChanged = () => {
+			qc.invalidateQueries({ queryKey: ["/points/applicable"] });
+		};
+		$(document.body).on("update_checkout updated_checkout", onChanged);
+		return () => { $(document.body).off("update_checkout updated_checkout", onChanged); };
+	}, [qc]);
+
+	// One-shot toast captured into local state so dismiss sticks for the
+	// session (server deletes the flag after one read).
+	const [autoClearedNotice, setAutoClearedNotice] = useState(false);
+	useEffect(() => {
+		if (summary.data?.auto_cleared) setAutoClearedNotice(true);
+	}, [summary.data?.auto_cleared]);
+
+	// Wipe stale apply errors when the cart context changes — otherwise a
+	// rejected apply ("coupon covers cart") stays visible after the customer
+	// removes the coupon, even though the apply would now succeed.
+	const cartTotal = summary.data?.cart_total;
+	const maxApplicable = summary.data?.max_applicable;
+	useEffect(() => {
+		if (apply.isError) apply.reset();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cartTotal, maxApplicable]);
+
 	if (summary.isLoading) {
 		return (
-			<Card className="zc-mb-4">
+			<Card className="zc-mb-4 zc-mt-6">
 				<CardHeader>
 					<Skeleton className="zc-h-5 zc-w-40" />
 					<Skeleton className="zc-h-4 zc-w-64" />
@@ -51,11 +77,9 @@ export function PointsTenderWidget() {
 	const d = summary.data;
 	const { balance, applied, max_applicable, redemption_rate, min_redemption } = d;
 
-	// Don't render the widget at all when the user has no usable balance —
-	// it'd be visual clutter on the cart for a customer with nothing to spend.
 	if (max_applicable < min_redemption && applied === 0) {
 		return balance > 0 ? (
-			<Card className="zc-mb-4">
+			<Card className="zc-mb-4 zc-mt-6">
 				<CardHeader>
 					<CardTitle className="zc-text-base">Use your points</CardTitle>
 					<CardDescription>
@@ -66,17 +90,13 @@ export function PointsTenderWidget() {
 		) : null;
 	}
 
-	// Is the cart-side cap stricter than the balance-side cap? When the
-	// customer's balance > what the cart can absorb, we want to surface the
-	// "max for this order" framing so they understand why the slider stops
-	// short of their full balance. (When the balance is the binding cap,
-	// "max" and "balance" are effectively the same number — no need to
-	// surface the distinction.)
+	// Only surface "max for this order" framing when the cart cap is the
+	// binding one; otherwise it's redundant with the balance line.
 	const balanceInPoints = Math.floor(balance / redemption_rate) * redemption_rate;
 	const cartCapBinding  = max_applicable < balanceInPoints;
 
 	return (
-		<Card className="zc-mb-4">
+		<Card className="zc-mb-4 zc-mt-6">
 			<CardHeader>
 				<CardTitle className="zc-text-base">Use your points</CardTitle>
 				<CardDescription>
@@ -92,6 +112,9 @@ export function PointsTenderWidget() {
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
+				{autoClearedNotice ? (
+					<AutoClearedNotice onDismiss={() => setAutoClearedNotice(false)} />
+				) : null}
 				{applied > 0 ? (
 					<AppliedState
 						applied={applied}
@@ -115,6 +138,24 @@ export function PointsTenderWidget() {
 	);
 }
 
+function AutoClearedNotice({ onDismiss }) {
+	return (
+		<div className="zc-mb-3 zc-flex zc-items-start zc-justify-between zc-gap-3 zc-rounded-lg zc-border zc-border-amber-200 zc-bg-amber-50 zc-p-3">
+			<p className="zc-text-xs zc-text-amber-900">
+				Your applied points were removed — the coupon covered the full total. Your balance was not debited.
+			</p>
+			<button
+				type="button"
+				onClick={onDismiss}
+				className="zc-shrink-0 zc-text-amber-900 hover:zc-text-amber-700"
+				aria-label="Dismiss"
+			>
+				×
+			</button>
+		</div>
+	);
+}
+
 function AppliedState({ applied, appliedDollars, onClear, clearing }) {
 	return (
 		<div className="zc-flex zc-items-center zc-justify-between zc-gap-3 zc-rounded-lg zc-border zc-border-emerald-200 zc-bg-emerald-50 zc-p-3">
@@ -134,11 +175,10 @@ function AppliedState({ applied, appliedDollars, onClear, clearing }) {
 }
 
 function ApplyForm({ max, min, rate, onApply, applying, error, cartCapBinding }) {
-	// Default the slider to the next multiple of `rate` ≥ min, capped at max.
 	const initial = Math.max(min, Math.min(max, Math.floor(max / rate) * rate));
 	const [points, setPoints] = useState(initial);
 
-	// If max changes (cart total shrank, balance dropped), keep the slider valid.
+	// Re-clamp the slider when max changes underneath us.
 	useEffect(() => {
 		if (points > max) setPoints(Math.floor(max / rate) * rate);
 	}, [max, rate, points]);
@@ -190,47 +230,28 @@ function ApplyForm({ max, min, rate, onApply, applying, error, cartCapBinding })
 }
 
 /**
- * Asks every interested party to re-read the cart/checkout so the new fee
- * line shows up without a full page reload.
+ * Re-renders cart totals after our apply/clear. Different templates need
+ * different signals; we try each in order and stop at the first that hits:
  *
- *   1. **ai-zippy theme React checkout** (primary) — listens to the custom
- *      DOM event `zippy-crm:tender-changed`. The theme's CheckoutApp re-fetches
- *      cart data via WC Store API on this event.
+ *   0. wp.data Store API — needed by the WC Checkout block (it doesn't
+ *      listen to jQuery events at all).
+ *   A1. ai-zippy theme — repaints `#az-checkout-totals` via the theme's
+ *      `az_get_checkout_totals` admin-ajax. Must short-circuit here: the
+ *      widget mount point lives inside `#order_review` on this template,
+ *      and the classic strategies below would tear down our React root.
+ *   A. Default WC classic — paste the server-rendered fragment we already
+ *      received with the apply response, avoiding the `update_checkout`
+ *      AJAX race (two responses fighting to replace the same fragment).
+ *   1+2. Fallback for unknown templates — fire `update_checkout` and, if
+ *      WC's `updated_checkout` doesn't fire back within 700ms, AJAX the
+ *      `update_order_review` endpoint directly.
  *
- *   2. **WC blocks-based checkout** — handled implicitly: the Store API
- *      client revalidates cached cart data on most user interactions. We
- *      don't need to trigger anything for this one.
- *
- *   3. **Classic WC PHP checkout** — fires the `update_checkout` jQuery event
- *      so WC's own checkout fragments re-render with the new fee line.
- *
- * Quirks we work around for the classic checkout:
- *   - WC's wc-checkout.js binds its handler to `$('form.checkout')` AND to
- *     `$(document.body)`, depending on WC version. Trigger on both so we
- *     don't depend on the version.
- *   - WC has internal AJAX queueing — calling update_checkout while a prior
- *     request is in-flight gets coalesced. If our trigger fires inside the
- *     same microtask as React's state commit, the click handler hasn't yet
- *     yielded and WC's prior init AJAX may still be running. Defer to the
- *     next animation frame so React commits first, then schedule a second
- *     trigger 350ms later as belt-and-braces in case the first was queued
- *     and dropped.
- *   - Some themes ship a noConflict jQuery; trust window.jQuery (the WC
- *     handle) which is the one wc-checkout.js binds against.
- *
- * Event name: `zippy-crm:tender-changed` (was `zippy-crm:cart-tender-changed`
- * before v1.13.0 — renamed when redemption moved off the cart page).
+ * The custom `zippy-crm:tender-changed` event is also dispatched for any
+ * theme that wants to wire its own listener.
  */
 function triggerCartRefresh(orderReviewHtml) {
 	window.dispatchEvent(new CustomEvent("zippy-crm:tender-changed"));
 
-	// Strategy 0 (WC Checkout block / Store-API flow): invalidate the
-	// wc/store/cart resolution so the block refetches its totals from
-	// /wc/store/v1/cart. Required when the page is rendered by
-	// `<!-- wp:woocommerce/checkout /-->` rather than the legacy
-	// [woocommerce_checkout] shortcode — the block doesn't listen for the
-	// `update_checkout` jQuery event at all. No-op on classic checkouts where
-	// wp.data isn't loaded.
 	const wpData = window.wp?.data;
 	if (wpData?.dispatch) {
 		const cartStore = wpData.dispatch("wc/store/cart");
@@ -239,39 +260,35 @@ function triggerCartRefresh(orderReviewHtml) {
 
 	const $ = window.jQuery;
 
-	// Strategy A (classic checkout, preferred): paste the server-rendered
-	// order-review fragment that came with the apply/clear response. This
-	// avoids the jQuery `update_checkout` round-trip entirely and eliminates
-	// the race where two parallel `update_order_review` AJAX calls fight to
-	// replace the fragment (the slower one wins and can carry stale data,
-	// leaving a "Points redemption" row visible even after the customer
-	// clicked Remove). The HTML already reflects the post-clear cart state.
+	// ai-zippy template: repaint its dedicated totals block. We must NOT also
+	// fall through to the classic strategies — they'd tear down the widget's
+	// React root which lives inside `#order_review` on this template.
+	const ajaxUrl = window.zippyCrm?.ajaxUrl;
+	if (typeof $ === "function" && $("#az-checkout-totals").length && ajaxUrl) {
+		$.post(ajaxUrl, { action: "az_get_checkout_totals" }, (res) => {
+			if (res && res.success && res.data && res.data.html) {
+				$("#az-checkout-totals").html(res.data.html);
+			}
+		});
+		return;
+	}
+
+	// Default classic WC: paste the pre-rendered fragment.
 	if (orderReviewHtml && typeof $ === "function") {
 		const $target = $(".woocommerce-checkout-review-order-table");
 		if ($target.length) {
 			$target.replaceWith(orderReviewHtml);
-			// Fire WC's standard "I updated the order review" event so any
-			// listeners (payment gateway scripts, etc.) re-bind to the new DOM.
 			$(document.body).trigger("updated_checkout");
 			return;
 		}
-		// If the selector isn't on the page (e.g. block-based checkout), fall
-		// through to the jQuery-trigger path below.
 	}
 
 	if (typeof $ !== "function") return;
 
-	// Strategy 1: the standard jQuery trigger WC checkout.js listens for.
-	// WC's handler is delegated on `body` — a form-level trigger would just
-	// bubble there, so triggering on body once is enough. Triggering on both
-	// (as an earlier draft did) caused two AJAX round-trips per call.
+	// Fallback: trigger WC's update_checkout flow, then direct-AJAX after
+	// 700ms if WC didn't ack. Covers themes that rebind form.checkout in
+	// ways that swallow the jQuery trigger.
 	const fireTrigger = () => $(document.body).trigger("update_checkout");
-
-	// Strategy 2: direct AJAX to WC's update_order_review endpoint. The trigger
-	// approach can silently no-op when WC hasn't finished its init sequence or
-	// when a theme rebinds form.checkout. Calling the endpoint directly with
-	// the same payload WC's checkout.js sends always refreshes the totals
-	// fragment.
 	const fireDirect = () => {
 		const params = window.wc_checkout_params;
 		if (!params || !params.wc_ajax_url) return;
@@ -297,7 +314,6 @@ function triggerCartRefresh(orderReviewHtml) {
 		};
 		$.post(url, data).done((html) => {
 			if (typeof html === "object" && html.fragments) {
-				// WC returns fragments keyed by selector. Replace each in the DOM.
 				$.each(html.fragments, (selector, content) => {
 					$(selector).replaceWith(content);
 				});
@@ -306,10 +322,8 @@ function triggerCartRefresh(orderReviewHtml) {
 		});
 	};
 
-	// Trigger after React commits so any state change in this tick is
-	// reflected in the form values WC reads. If WC's `updated_checkout`
-	// event fires within 700ms we know checkout.js handled the trigger and
-	// the fallback isn't needed. Otherwise we step in with a direct AJAX.
+	// rAF so React commits before WC reads form values; direct AJAX as
+	// fallback if `updated_checkout` doesn't fire back in 700ms.
 	let answered = false;
 	$(document.body).one("updated_checkout", () => { answered = true; });
 	requestAnimationFrame(fireTrigger);
