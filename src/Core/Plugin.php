@@ -45,6 +45,15 @@ final class Plugin {
 		Installer::run();
 		Endpoints::register();
 		flush_rewrite_rules();
+
+		// First-run onboarding flag. We only set this on the FIRST ever
+		// activation — re-activations (e.g. after a version bump or after
+		// the plugin was briefly deactivated) shouldn't re-trigger the
+		// guide. The sticky "ever_activated" option is the gate.
+		if ( ! get_option( 'zippy_crm_ever_activated' ) ) {
+			update_option( 'zippy_crm_ever_activated', '1', false );
+			update_option( \ZippyCrm\Controllers\Admin\AdminMenu::ACTIVATION_FLAG_OPTION, '1', false );
+		}
 	}
 
 	public static function on_deactivate(): void {

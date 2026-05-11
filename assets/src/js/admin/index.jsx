@@ -25,7 +25,8 @@ const mounts = [
 	{ id: "zippy-crm-admin-points",   panel: "points"   },
 	{ id: "zippy-crm-admin-reports",  panel: "reports"  },
 	{ id: "zippy-crm-admin-audit",    panel: "audit"    },
-	{ id: "zippy-crm-admin-settings", panel: "settings" },
+	{ id: "zippy-crm-admin-settings",   panel: "settings"   },
+	{ id: "zippy-crm-admin-onboarding", panel: "onboarding" },
 ];
 
 mounts.forEach(({ id, panel }) => {

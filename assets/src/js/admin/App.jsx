@@ -20,6 +20,10 @@ const UsersPanel = lazy(() => import("./users/UsersPanel.jsx"));
 // Settings panel — small, infrequent visits; lazy-load consistent with the others.
 const SettingsPanel = lazy(() => import("./settings/SettingsPanel.jsx"));
 
+// Onboarding panel — only shown on first activation + via the Settings
+// re-access link. Lazy-load so it's not in the everyday bundle.
+const OnboardingPanel = lazy(() => import("./onboarding/OnboardingPanel.jsx"));
+
 export default function App({ panel }) {
 	if (panel === "members")  return <MembersPanel />;
 	if (panel === "tiers")    return <TiersPanel />;
@@ -43,6 +47,11 @@ export default function App({ panel }) {
 	if (panel === "settings") return (
 		<Suspense fallback={<div className="zc-p-6 zc-text-sm zc-text-zinc-500">Loading settings…</div>}>
 			<SettingsPanel />
+		</Suspense>
+	);
+	if (panel === "onboarding") return (
+		<Suspense fallback={<div className="zc-p-6 zc-text-sm zc-text-zinc-500">Loading setup guide…</div>}>
+			<OnboardingPanel />
 		</Suspense>
 	);
 

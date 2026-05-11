@@ -205,6 +205,52 @@ final class NotifEngine {
 		return false;
 	}
 
+	/**
+	 * Render + send a sample voucher-notification email to a single address.
+	 * Used by the onboarding wizard's "Send a test email" button so admins
+	 * can verify SMTP works before publishing a real voucher (i.e. before
+	 * customers are downstream of any mail-config bugs).
+	 *
+	 * Side effects: just `wp_mail` to the given address. No NotificationLog
+	 * rows (test sends aren't part of customer-facing delivery accounting).
+	 *
+	 * @return true|\WP_Error
+	 */
+	public static function send_test_email( int $user_id, string $to_email ) {
+		$user = get_userdata( $user_id );
+		if ( ! $user ) {
+			return new \WP_Error( 'no_user', __( 'User not found.', 'zippy-crm' ) );
+		}
+		if ( ! is_email( $to_email ) ) {
+			return new \WP_Error( 'bad_email', __( 'Invalid email address.', 'zippy-crm' ) );
+		}
+
+		// Synthetic voucher payload — shape matches what the template expects.
+		// Realistic enough to verify the layout renders correctly.
+		$voucher = [
+			'title'          => __( 'Sample voucher — 20% off your next order', 'zippy-crm' ),
+			'description'    => __( 'This is a preview of the email customers receive when a new voucher is published.', 'zippy-crm' ),
+			'discount_type'  => 'percent',
+			'discount_value' => 20,
+			'code'           => 'SAMPLE-PREVIEW',
+			'expires_at'     => gmdate( 'Y-m-d H:i:s', time() + ( 14 * DAY_IN_SECONDS ) ),
+		];
+
+		$subject = '[' . get_bloginfo( 'name' ) . '] ' . __( 'Test email from Zippy CRM', 'zippy-crm' );
+		$body    = self::render_template( $user, $voucher );
+		$headers = [ 'Content-Type: text/html; charset=UTF-8' ];
+
+		try {
+			$ok = wp_mail( $to_email, $subject, $body, $headers );
+		} catch ( \Throwable $e ) {
+			return new \WP_Error( 'send_failed', $e->getMessage() );
+		}
+		if ( ! $ok ) {
+			return new \WP_Error( 'send_failed', __( 'wp_mail returned false. Check your SMTP configuration.', 'zippy-crm' ) );
+		}
+		return true;
+	}
+
 	private static function build_subject( array $voucher ): string {
 		$is_percent = in_array( (string) ( $voucher['discount_type'] ?? '' ), \ZippyCrm\Models\Voucher::PERCENT_DISCOUNT_TYPES, true );
 		$value = $is_percent
