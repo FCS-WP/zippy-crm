@@ -24,12 +24,12 @@ export function PointsTenderWidget() {
 
 	const apply = useApiMutation("post", "/points/apply", {
 		invalidate: ["/points/applicable", "/points/me"],
-		onSuccess: () => triggerCartRefresh(),
+		onSuccess: (data) => triggerCartRefresh(data?.order_review_html),
 	});
 
 	const clear = useApiMutation("delete", "/points/apply", {
 		invalidate: ["/points/applicable", "/points/me"],
-		onSuccess: () => triggerCartRefresh(),
+		onSuccess: (data) => triggerCartRefresh(data?.order_review_html),
 	});
 
 	if (summary.isLoading) {
@@ -66,12 +66,29 @@ export function PointsTenderWidget() {
 		) : null;
 	}
 
+	// Is the cart-side cap stricter than the balance-side cap? When the
+	// customer's balance > what the cart can absorb, we want to surface the
+	// "max for this order" framing so they understand why the slider stops
+	// short of their full balance. (When the balance is the binding cap,
+	// "max" and "balance" are effectively the same number — no need to
+	// surface the distinction.)
+	const balanceInPoints = Math.floor(balance / redemption_rate) * redemption_rate;
+	const cartCapBinding  = max_applicable < balanceInPoints;
+
 	return (
 		<Card className="zc-mb-4">
 			<CardHeader>
 				<CardTitle className="zc-text-base">Use your points</CardTitle>
 				<CardDescription>
-					Balance: <span className="zc-font-medium">{number(balance)} pts</span> ({money(balance / redemption_rate)})
+					You have <span className="zc-font-medium">{number(balance)} pts</span> ({money(balance / redemption_rate)} total)
+					{cartCapBinding ? (
+						<>
+							<br />
+							<span className="zc-text-xs zc-text-zinc-500">
+								Up to <strong className="zc-text-zinc-700">{number(max_applicable)} pts ({money(max_applicable / redemption_rate)})</strong> can be applied to this order.
+							</span>
+						</>
+					) : null}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
@@ -90,6 +107,7 @@ export function PointsTenderWidget() {
 						onApply={(points) => apply.mutate({ points })}
 						applying={apply.isPending}
 						error={apply.error?.message}
+						cartCapBinding={cartCapBinding}
 					/>
 				)}
 			</CardContent>
@@ -115,7 +133,7 @@ function AppliedState({ applied, appliedDollars, onClear, clearing }) {
 	);
 }
 
-function ApplyForm({ max, min, rate, onApply, applying, error }) {
+function ApplyForm({ max, min, rate, onApply, applying, error, cartCapBinding }) {
 	// Default the slider to the next multiple of `rate` ≥ min, capped at max.
 	const initial = Math.max(min, Math.min(max, Math.floor(max / rate) * rate));
 	const [points, setPoints] = useState(initial);
@@ -142,7 +160,9 @@ function ApplyForm({ max, min, rate, onApply, applying, error }) {
 				/>
 				<div className="zc-mt-1 zc-flex zc-justify-between zc-text-xs zc-text-zinc-500">
 					<span>{number(min)} pts</span>
-					<span>{number(max)} pts</span>
+					<span className={cartCapBinding ? "zc-text-amber-700" : ""}>
+						{number(max)} pts{cartCapBinding ? " (max for this order)" : ""}
+					</span>
 				</div>
 			</div>
 
@@ -182,18 +202,116 @@ function ApplyForm({ max, min, rate, onApply, applying, error }) {
  *      don't need to trigger anything for this one.
  *
  *   3. **Classic WC PHP checkout** — fires the `update_checkout` jQuery event
- *      so WC's own checkout fragments re-render with the new fee line. This
- *      is the standard WC convention; safe even when no listener is wired.
+ *      so WC's own checkout fragments re-render with the new fee line.
+ *
+ * Quirks we work around for the classic checkout:
+ *   - WC's wc-checkout.js binds its handler to `$('form.checkout')` AND to
+ *     `$(document.body)`, depending on WC version. Trigger on both so we
+ *     don't depend on the version.
+ *   - WC has internal AJAX queueing — calling update_checkout while a prior
+ *     request is in-flight gets coalesced. If our trigger fires inside the
+ *     same microtask as React's state commit, the click handler hasn't yet
+ *     yielded and WC's prior init AJAX may still be running. Defer to the
+ *     next animation frame so React commits first, then schedule a second
+ *     trigger 350ms later as belt-and-braces in case the first was queued
+ *     and dropped.
+ *   - Some themes ship a noConflict jQuery; trust window.jQuery (the WC
+ *     handle) which is the one wc-checkout.js binds against.
  *
  * Event name: `zippy-crm:tender-changed` (was `zippy-crm:cart-tender-changed`
  * before v1.13.0 — renamed when redemption moved off the cart page).
  */
-function triggerCartRefresh() {
+function triggerCartRefresh(orderReviewHtml) {
 	window.dispatchEvent(new CustomEvent("zippy-crm:tender-changed"));
 
-	// Classic WC checkout listens to this jQuery event to recompute totals.
-	// jQuery is loaded on the WC checkout page; bail safely if absent.
-	if (typeof window.jQuery === "function") {
-		window.jQuery(document.body).trigger("update_checkout");
+	// Strategy 0 (WC Checkout block / Store-API flow): invalidate the
+	// wc/store/cart resolution so the block refetches its totals from
+	// /wc/store/v1/cart. Required when the page is rendered by
+	// `<!-- wp:woocommerce/checkout /-->` rather than the legacy
+	// [woocommerce_checkout] shortcode — the block doesn't listen for the
+	// `update_checkout` jQuery event at all. No-op on classic checkouts where
+	// wp.data isn't loaded.
+	const wpData = window.wp?.data;
+	if (wpData?.dispatch) {
+		const cartStore = wpData.dispatch("wc/store/cart");
+		cartStore?.invalidateResolutionForStore?.();
 	}
+
+	const $ = window.jQuery;
+
+	// Strategy A (classic checkout, preferred): paste the server-rendered
+	// order-review fragment that came with the apply/clear response. This
+	// avoids the jQuery `update_checkout` round-trip entirely and eliminates
+	// the race where two parallel `update_order_review` AJAX calls fight to
+	// replace the fragment (the slower one wins and can carry stale data,
+	// leaving a "Points redemption" row visible even after the customer
+	// clicked Remove). The HTML already reflects the post-clear cart state.
+	if (orderReviewHtml && typeof $ === "function") {
+		const $target = $(".woocommerce-checkout-review-order-table");
+		if ($target.length) {
+			$target.replaceWith(orderReviewHtml);
+			// Fire WC's standard "I updated the order review" event so any
+			// listeners (payment gateway scripts, etc.) re-bind to the new DOM.
+			$(document.body).trigger("updated_checkout");
+			return;
+		}
+		// If the selector isn't on the page (e.g. block-based checkout), fall
+		// through to the jQuery-trigger path below.
+	}
+
+	if (typeof $ !== "function") return;
+
+	// Strategy 1: the standard jQuery trigger WC checkout.js listens for.
+	// WC's handler is delegated on `body` — a form-level trigger would just
+	// bubble there, so triggering on body once is enough. Triggering on both
+	// (as an earlier draft did) caused two AJAX round-trips per call.
+	const fireTrigger = () => $(document.body).trigger("update_checkout");
+
+	// Strategy 2: direct AJAX to WC's update_order_review endpoint. The trigger
+	// approach can silently no-op when WC hasn't finished its init sequence or
+	// when a theme rebinds form.checkout. Calling the endpoint directly with
+	// the same payload WC's checkout.js sends always refreshes the totals
+	// fragment.
+	const fireDirect = () => {
+		const params = window.wc_checkout_params;
+		if (!params || !params.wc_ajax_url) return;
+		const url = params.wc_ajax_url.toString().replace("%%endpoint%%", "update_order_review");
+		const $form = $("form.checkout");
+		const data = {
+			security:        params.update_order_review_nonce,
+			payment_method:  $form.find('input[name="payment_method"]:checked').val() || "",
+			country:         $form.find('#billing_country').val() || "",
+			state:           $form.find('#billing_state').val() || "",
+			postcode:        $form.find(':input[name="billing_postcode"]').val() || "",
+			city:            $form.find(':input[name="billing_city"]').val() || "",
+			address:         $form.find(':input[name="billing_address_1"]').val() || "",
+			address_2:       $form.find(':input[name="billing_address_2"]').val() || "",
+			s_country:       $form.find('#shipping_country').val() || "",
+			s_state:         $form.find('#shipping_state').val() || "",
+			s_postcode:      $form.find(':input[name="shipping_postcode"]').val() || "",
+			s_city:          $form.find(':input[name="shipping_city"]').val() || "",
+			s_address:       $form.find(':input[name="shipping_address_1"]').val() || "",
+			s_address_2:     $form.find(':input[name="shipping_address_2"]').val() || "",
+			has_full_address: $form.find('input#billing_address_1').val() ? "true" : "false",
+			post_data:       $form.serialize(),
+		};
+		$.post(url, data).done((html) => {
+			if (typeof html === "object" && html.fragments) {
+				// WC returns fragments keyed by selector. Replace each in the DOM.
+				$.each(html.fragments, (selector, content) => {
+					$(selector).replaceWith(content);
+				});
+				$(document.body).trigger("updated_checkout", [html]);
+			}
+		});
+	};
+
+	// Trigger after React commits so any state change in this tick is
+	// reflected in the form values WC reads. If WC's `updated_checkout`
+	// event fires within 700ms we know checkout.js handled the trigger and
+	// the fallback isn't needed. Otherwise we step in with a direct AJAX.
+	let answered = false;
+	$(document.body).one("updated_checkout", () => { answered = true; });
+	requestAnimationFrame(fireTrigger);
+	setTimeout(() => { if (!answered) fireDirect(); }, 700);
 }
