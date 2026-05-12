@@ -6,6 +6,7 @@ import { Button } from "@/js/shared/ui/button.jsx";
 import { Skeleton } from "@/js/shared/ui/skeleton.jsx";
 import { money, number } from "@/js/shared/utils/format.js";
 import { triggerCartRefresh } from "./cartRefresh.js";
+import { CollapsePanel } from "./CollapsePanel.jsx";
 
 /**
  * "Use your points" widget. Reads cart context from /points/applicable and
@@ -96,46 +97,187 @@ export function PointsTenderWidget() {
 	const balanceInPoints = Math.floor(balance / redemption_rate) * redemption_rate;
 	const cartCapBinding  = max_applicable < balanceInPoints;
 
+	// Applied-state collapse: when points are applied, the widget becomes
+	// a status row (mirrors the voucher tray's collapsed shape). The slider
+	// is irrelevant in this state — the only meaningful action is Remove,
+	// and that lives inline in the green strip. Click the chevron to peek
+	// at the full balance/cap context.
+	if (applied > 0) {
+		return (
+			<AppliedCollapsibleCard
+				applied={applied}
+				appliedDollars={d.applied_dollars}
+				balance={balance}
+				redemptionRate={redemption_rate}
+				maxApplicable={max_applicable}
+				cartCapBinding={cartCapBinding}
+				autoClearedNotice={autoClearedNotice}
+				onDismissNotice={() => setAutoClearedNotice(false)}
+				onClear={() => clear.mutate({})}
+				clearing={clear.isPending}
+			/>
+		);
+	}
+
 	return (
-		<Card className="zc-mb-4 zc-mt-6">
-			<CardHeader>
-				<CardTitle className="zc-text-base">Use your points</CardTitle>
-				<CardDescription>
-					You have <span className="zc-font-medium">{number(balance)} pts</span> ({money(balance / redemption_rate)} total)
-					{cartCapBinding ? (
-						<>
-							<br />
-							<span className="zc-text-xs zc-text-zinc-500">
-								Up to <strong className="zc-text-zinc-700">{number(max_applicable)} pts ({money(max_applicable / redemption_rate)})</strong> can be applied to this order.
-							</span>
-						</>
+		<ApplyCollapsibleCard
+			balance={balance}
+			redemptionRate={redemption_rate}
+			maxApplicable={max_applicable}
+			minRedemption={min_redemption}
+			cartCapBinding={cartCapBinding}
+			autoClearedNotice={autoClearedNotice}
+			onDismissNotice={() => setAutoClearedNotice(false)}
+			onApply={(points) => apply.mutate({ points })}
+			applying={apply.isPending}
+			applyError={apply.error?.message}
+		/>
+	);
+}
+
+function ApplyCollapsibleCard({
+	balance,
+	redemptionRate,
+	maxApplicable,
+	minRedemption,
+	cartCapBinding,
+	autoClearedNotice,
+	onDismissNotice,
+	onApply,
+	applying,
+	applyError,
+}) {
+	const [expanded, setExpanded] = useState(false);
+	return (
+		<Card className="zc-mb-4 zc-mt-6 zc-overflow-hidden">
+			<button
+				type="button"
+				onClick={() => setExpanded((v) => !v)}
+				aria-expanded={expanded}
+				className="zc-w-full zc-flex zc-items-center zc-justify-between zc-gap-3 zc-px-6 zc-py-4 zc-text-left hover:zc-bg-zinc-50"
+			>
+				<div className="zc-flex zc-items-center zc-gap-3 zc-min-w-0">
+					<PointsIcon />
+					<div className="zc-min-w-0">
+						<p className="zc-text-sm zc-font-semibold zc-text-zinc-900">Use your points</p>
+						<p className="zc-mt-0.5 zc-text-xs zc-text-zinc-500">
+							{number(balance)} pts available
+							{cartCapBinding ? ` · up to ${money(maxApplicable / redemptionRate)} off` : ` · ${money(balance / redemptionRate)} total`}
+						</p>
+					</div>
+				</div>
+				<ChevronIcon expanded={expanded} />
+			</button>
+
+			<CollapsePanel open={expanded}>
+				<CardContent className="zc-border-t zc-border-zinc-100 !zc-pt-4">
+					{autoClearedNotice ? (
+						<AutoClearedNotice onDismiss={onDismissNotice} />
 					) : null}
-				</CardDescription>
-			</CardHeader>
-			<CardContent>
-				{autoClearedNotice ? (
-					<AutoClearedNotice onDismiss={() => setAutoClearedNotice(false)} />
-				) : null}
-				{applied > 0 ? (
-					<AppliedState
-						applied={applied}
-						appliedDollars={d.applied_dollars}
-						onClear={() => clear.mutate({})}
-						clearing={clear.isPending}
-					/>
-				) : (
+					{cartCapBinding ? (
+						<p className="zc-mb-3 zc-text-xs zc-text-zinc-500">
+							Up to <strong className="zc-text-zinc-700">{number(maxApplicable)} pts ({money(maxApplicable / redemptionRate)})</strong> can be applied to this order.
+						</p>
+					) : null}
 					<ApplyForm
-						max={max_applicable}
-						min={min_redemption}
-						rate={redemption_rate}
-						onApply={(points) => apply.mutate({ points })}
-						applying={apply.isPending}
-						error={apply.error?.message}
+						max={maxApplicable}
+						min={minRedemption}
+						rate={redemptionRate}
+						onApply={onApply}
+						applying={applying}
+						error={applyError}
 						cartCapBinding={cartCapBinding}
 					/>
-				)}
-			</CardContent>
+				</CardContent>
+			</CollapsePanel>
 		</Card>
+	);
+}
+
+function AppliedCollapsibleCard({
+	applied,
+	appliedDollars,
+	balance,
+	redemptionRate,
+	maxApplicable,
+	cartCapBinding,
+	autoClearedNotice,
+	onDismissNotice,
+	onClear,
+	clearing,
+}) {
+	const [expanded, setExpanded] = useState(false);
+	return (
+		<Card className="zc-mb-4 zc-mt-6 zc-overflow-hidden">
+			<button
+				type="button"
+				onClick={() => setExpanded((v) => !v)}
+				aria-expanded={expanded}
+				className="zc-w-full zc-flex zc-items-center zc-justify-between zc-gap-3 zc-px-6 zc-py-4 zc-text-left hover:zc-bg-zinc-50"
+			>
+				<div className="zc-flex zc-items-center zc-gap-3 zc-min-w-0">
+					<PointsIcon />
+					<div className="zc-min-w-0">
+						<p className="zc-text-sm zc-font-semibold zc-text-zinc-900">Use your points</p>
+						<p className="zc-mt-0.5 zc-text-xs zc-text-emerald-700">
+							Applied · {number(applied)} pts · {money(appliedDollars)} off
+						</p>
+					</div>
+				</div>
+				<div className="zc-flex zc-items-center zc-gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={(e) => { e.stopPropagation(); onClear(); }}
+						loading={clearing}
+					>
+						Remove
+					</Button>
+					<ChevronIcon expanded={expanded} />
+				</div>
+			</button>
+
+			<CollapsePanel open={expanded}>
+				<CardContent className="zc-border-t zc-border-zinc-100 !zc-pt-4">
+					{autoClearedNotice ? (
+						<AutoClearedNotice onDismiss={onDismissNotice} />
+					) : null}
+					<p className="zc-text-sm zc-text-zinc-700">
+						You have <span className="zc-font-medium">{number(balance)} pts</span> ({money(balance / redemptionRate)} total)
+					</p>
+					{cartCapBinding ? (
+						<p className="zc-mt-1 zc-text-xs zc-text-zinc-500">
+							Up to <strong className="zc-text-zinc-700">{number(maxApplicable)} pts ({money(maxApplicable / redemptionRate)})</strong> can be applied to this order.
+						</p>
+					) : null}
+				</CardContent>
+			</CollapsePanel>
+		</Card>
+	);
+}
+
+function PointsIcon() {
+	// Coin / star icon — telegraphs "loyalty currency" at a glance.
+	return (
+		<span className="zc-flex zc-size-9 zc-shrink-0 zc-items-center zc-justify-center zc-rounded-full zc-bg-amber-100 zc-text-amber-700" aria-hidden>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="zc-size-5">
+				<circle cx="12" cy="12" r="9" />
+				<path d="M12 7v10M9.5 9.5h3.5a2 2 0 0 1 0 4H9.5h4a2 2 0 0 1 0 4H9.5" />
+			</svg>
+		</span>
+	);
+}
+
+function ChevronIcon({ expanded }) {
+	return (
+		<svg
+			viewBox="0 0 20 20"
+			fill="currentColor"
+			className={`zc-size-4 zc-shrink-0 zc-text-zinc-500 zc-transition-transform ${expanded ? "zc-rotate-180" : ""}`}
+			aria-hidden
+		>
+			<path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.06l3.71-3.83a.75.75 0 1 1 1.08 1.04l-4.25 4.39a.75.75 0 0 1-1.08 0L5.21 8.27a.75.75 0 0 1 .02-1.06z" clipRule="evenodd" />
+		</svg>
 	);
 }
 
@@ -229,4 +371,3 @@ function ApplyForm({ max, min, rate, onApply, applying, error, cartCapBinding })
 		</div>
 	);
 }
-
