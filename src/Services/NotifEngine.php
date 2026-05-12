@@ -187,7 +187,7 @@ final class NotifEngine {
 
 		$subject = self::build_subject( $voucher );
 		$body    = self::render_template( $user, $voucher );
-		$headers = [ 'Content-Type: text/html; charset=UTF-8' ];
+		$headers = self::mail_headers();
 
 		try {
 			$ok = wp_mail( $user->user_email, $subject, $body, $headers );
@@ -238,7 +238,8 @@ final class NotifEngine {
 
 		$subject = '[' . get_bloginfo( 'name' ) . '] ' . __( 'Test email from Zippy CRM', 'zippy-crm' );
 		$body    = self::render_template( $user, $voucher );
-		$headers = [ 'Content-Type: text/html; charset=UTF-8' ];
+
+		$headers = self::mail_headers();
 
 		try {
 			$ok = wp_mail( $to_email, $subject, $body, $headers );
@@ -249,6 +250,26 @@ final class NotifEngine {
 			return new \WP_Error( 'send_failed', __( 'wp_mail returned false. Check your SMTP configuration.', 'zippy-crm' ) );
 		}
 		return true;
+	}
+
+	/**
+	 * Shared mail headers (Content-Type + From).
+	 *
+	 * We set From explicitly because WP's default is
+	 * `wordpress@<server-name>`. On dev/staging where the server name
+	 * is "localhost" / similar, PHPMailer rejects the address as
+	 * invalid BEFORE the SMTP handshake and wp_mail returns false. The
+	 * site's admin email is always a valid RFC address (WP enforces at
+	 * install), so it's the safest default. Sites can still override
+	 * with the standard `wp_mail_from` / `wp_mail_from_name` filters.
+	 */
+	private static function mail_headers(): array {
+		$from_email = (string) get_option( 'admin_email' );
+		$from_name  = (string) get_bloginfo( 'name' );
+		return [
+			'Content-Type: text/html; charset=UTF-8',
+			sprintf( 'From: %s <%s>', $from_name !== '' ? $from_name : 'WordPress', $from_email ),
+		];
 	}
 
 	private static function build_subject( array $voucher ): string {
