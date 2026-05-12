@@ -5,6 +5,7 @@ use ZippyCrm\Models\Voucher;
 use ZippyCrm\Models\VoucherClaim;
 use ZippyCrm\Models\VoucherCode;
 use ZippyCrm\Services\ClaimHandler;
+use ZippyCrm\Services\VoucherEligibility;
 use ZippyCrm\Services\VoucherService;
 use ZippyCrm\Support\DateTimeHelper;
 use ZippyCrm\Support\RestResponse;
@@ -105,6 +106,221 @@ final class VouchersController {
 			'expires_at'      => DateTimeHelper::mysql_to_iso( $voucher['expires_at'] ?? null ),
 			'applied_to_cart' => $applied_to_cart,
 		] );
+	}
+
+	/* ============================================================
+	 * Checkout tray (v1.14.0)
+	 *
+	 * Single read endpoint that powers the "Your vouchers" widget at
+	 * checkout. Returns three buckets:
+	 *
+	 *   - eligible_claimed   : claimed vouchers that apply to this cart
+	 *   - eligible_unclaimed : public vouchers the customer hasn't claimed
+	 *                         but could use right now (one-click claim+apply)
+	 *   - locked             : claimed OR unclaimed vouchers that exist but
+	 *                         don't apply to this cart, each with a friendly
+	 *                         `reason` ("Spend $5 more to use", etc.)
+	 *
+	 * Two writes accompany the read: `apply` for claimed vouchers,
+	 * `claim_and_apply` for the unclaimed bucket. Both go through
+	 * `maybe_apply_to_cart` so the same coupon-stacking behavior our
+	 * points-tender flow handles applies symmetrically here.
+	 * ============================================================ */
+
+	public static function checkout_tray( \WP_REST_Request $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return RestResponse::error( 'unauthorized', 'You must be logged in.', 401 );
+		}
+		self::ensure_cart_loaded();
+
+		$applied_codes = self::current_cart_codes();
+
+		// Bucket 1: claimed vouchers. Includes "already applied" flag so the
+		// React side can render an Applied state with a Remove CTA.
+		$claimed       = VoucherClaim::list_for_user( $user_id );
+		$eligible_yes  = [];
+		$locked        = [];
+		$claimed_ids   = [];
+		foreach ( $claimed as $row ) {
+			if ( (string) ( $row['claim_status'] ?? '' ) !== 'claimed' ) {
+				continue; // 'used' / 'expired' claims belong on the history tab.
+			}
+			$claimed_ids[] = (int) $row['voucher_id'];
+			$voucher_row   = Voucher::find( (int) $row['voucher_id'] );
+			if ( ! $voucher_row ) {
+				continue;
+			}
+			$eval = VoucherEligibility::evaluate_for_cart( $voucher_row );
+			$item = self::shape_tray_item( $row['code'], $voucher_row, true, $eval, $applied_codes );
+			if ( $eval['eligible'] ) {
+				$eligible_yes[] = $item;
+			} else {
+				$locked[] = $item;
+			}
+		}
+
+		// Bucket 2: publishable + audience-eligible vouchers the customer
+		// hasn't claimed yet. `list_available_for_user` already filters by
+		// audience (public/email/tier) and excludes claimed-by-this-user.
+		$publishable = Voucher::list_available_for_user( $user_id );
+		foreach ( $publishable as $voucher_row ) {
+			if ( in_array( (int) $voucher_row['id'], $claimed_ids, true ) ) {
+				continue;
+			}
+			$mode = (string) ( $voucher_row['distribution_mode'] ?? VoucherService::MODE_SINGLE );
+			// Multi-code distribution: until the customer claims, no real
+			// code exists for them. We can still evaluate cart fit against
+			// the master voucher row, but skip if no remaining codes.
+			if ( $mode === VoucherService::MODE_MULTI_PUBLIC && (int) ( $voucher_row['remaining_slots'] ?? 0 ) <= 0 ) {
+				continue;
+			}
+			$eval = VoucherEligibility::evaluate_for_cart( $voucher_row );
+			$item = self::shape_tray_item( null, $voucher_row, false, $eval, $applied_codes );
+			if ( $eval['eligible'] ) {
+				$eligible_yes[] = $item; // will be split client-side by `claimed:false` flag
+			} else {
+				$locked[] = $item;
+			}
+		}
+
+		return RestResponse::ok( [
+			'eligible' => $eligible_yes,
+			'locked'   => $locked,
+			// Surface for the widget's "X more locked" counter without
+			// requiring it to count the array.
+			'locked_count' => count( $locked ),
+		] );
+	}
+
+	/**
+	 * Apply a claimed voucher to the current cart. The customer must already
+	 * own a claim row for this voucher — unclaimed vouchers go through
+	 * `claim_and_apply` instead.
+	 */
+	public static function apply_to_cart( \WP_REST_Request $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return RestResponse::error( 'unauthorized', 'You must be logged in.', 401 );
+		}
+
+		$voucher_id = (int) $request['id'];
+		$claim      = VoucherClaim::find_for_user( $voucher_id, $user_id );
+		if ( ! $claim || (string) ( $claim['status'] ?? '' ) !== 'claimed' ) {
+			return RestResponse::error( 'not_claimed', __( 'You must claim this voucher first.', 'zippy-crm' ), 404 );
+		}
+
+		$code = self::resolve_claim_code( $claim, $voucher_id );
+		if ( $code === '' ) {
+			return RestResponse::error( 'voucher_inactive', __( 'This voucher is no longer available.', 'zippy-crm' ), 410 );
+		}
+
+		self::ensure_cart_loaded();
+		if ( ! self::maybe_apply_to_cart( $code ) ) {
+			return RestResponse::error( 'apply_failed', __( 'This voucher cannot be applied to your current cart.', 'zippy-crm' ), 400 );
+		}
+
+		return RestResponse::ok( [ 'code' => $code, 'applied' => true ] );
+	}
+
+	/**
+	 * Resolve the actual coupon code for a claim row. `find_for_user`'s
+	 * SELECT doesn't include the code (it's split across two tables for
+	 * single- vs multi-code vouchers), so we look it up here using the
+	 * same COALESCE logic as `list_my_claims.sql`.
+	 *
+	 * Returns '' if neither lookup succeeds — caller must treat that as
+	 * "voucher unavailable", NOT as "apply with empty code" (WC stores
+	 * empty entries in the cart and bombs on the next page load).
+	 */
+	private static function resolve_claim_code( array $claim, int $voucher_id ): string {
+		$code_id = isset( $claim['code_id'] ) ? (int) $claim['code_id'] : 0;
+		if ( $code_id > 0 ) {
+			$row = VoucherCode::find( $code_id );
+			if ( $row && ! empty( $row['code'] ) ) {
+				return (string) $row['code'];
+			}
+		}
+		$voucher = Voucher::find( $voucher_id );
+		return (string) ( $voucher['code'] ?? '' );
+	}
+
+	/**
+	 * Claim then apply in a single call. For unclaimed-but-eligible vouchers
+	 * the tray surfaces. If the claim succeeds but the apply fails (e.g.,
+	 * the cart shifted between page-render and click), we keep the claim —
+	 * the customer can apply it later from My Account.
+	 */
+	public static function claim_and_apply( \WP_REST_Request $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return RestResponse::error( 'unauthorized', 'You must be logged in.', 401 );
+		}
+
+		$voucher_id = (int) $request['id'];
+		$result     = ClaimHandler::claim( $voucher_id, $user_id );
+		if ( ! $result['valid'] ) {
+			$status = self::status_for_code( $result['code'] );
+			return RestResponse::error( $result['code'], $result['message'], $status );
+		}
+
+		$voucher       = $result['voucher'];
+		$customer_code = ! empty( $result['assigned_code'] )
+			? (string) $result['assigned_code']
+			: (string) $voucher['code'];
+
+		self::ensure_cart_loaded();
+		$applied = self::maybe_apply_to_cart( $customer_code );
+
+		return RestResponse::ok( [
+			'code'            => $customer_code,
+			'voucher_id'      => (int) $voucher['id'],
+			'applied_to_cart' => $applied,
+			// Friendly message tells the widget which path to take. If apply
+			// failed despite eligibility passing pre-flight (rare race), we
+			// kept the claim so the customer doesn't lose it.
+			'message'         => $applied
+				? __( 'Voucher claimed and applied.', 'zippy-crm' )
+				: __( 'Voucher claimed. We couldn\'t apply it to your cart — try again from your vouchers list.', 'zippy-crm' ),
+		] );
+	}
+
+	/**
+	 * Remove an applied voucher from the cart. Does NOT release the claim —
+	 * the customer can re-apply on this or a later checkout.
+	 */
+	public static function remove_from_cart( \WP_REST_Request $request ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return RestResponse::error( 'unauthorized', 'You must be logged in.', 401 );
+		}
+		self::ensure_cart_loaded();
+		$voucher_id = (int) $request['id'];
+		$voucher    = Voucher::find( $voucher_id );
+		if ( ! $voucher ) {
+			return RestResponse::error( 'voucher_inactive', __( 'Voucher is no longer available.', 'zippy-crm' ), 410 );
+		}
+
+		// Determine the actual code in the cart. Multi-code vouchers issue
+		// per-customer codes via the claim's code_id → voucher_codes table;
+		// single-code uses the master code on the voucher row.
+		$claim = VoucherClaim::find_for_user( $voucher_id, $user_id );
+		$code  = $claim ? self::resolve_claim_code( $claim, $voucher_id ) : (string) $voucher['code'];
+
+		if ( function_exists( 'WC' ) && WC()->cart ) {
+			// Force session hydration before remove. In REST context the
+			// cart object starts with applied_coupons=[], and remove_coupon
+			// would silently no-op against the empty list (then a follow-up
+			// calculate_totals reloads the session and puts the coupon
+			// back). Calling calculate_totals up front pulls applied_coupons
+			// out of the session so remove_coupon sees the real state.
+			if ( ! empty( WC()->cart->get_cart() ) ) {
+				WC()->cart->calculate_totals();
+			}
+			WC()->cart->remove_coupon( $code );
+			self::flush_cart_session();
+		}
+		return RestResponse::ok( [ 'code' => $code, 'removed' => true ] );
 	}
 
 	/* ============================================================
@@ -469,6 +685,85 @@ final class VouchersController {
 	}
 
 	/**
+	 * Shape a tray row. `voucher_code` is the customer's claim-specific code
+	 * for already-claimed rows, null for unclaimed rows (no code exists yet).
+	 */
+	private static function shape_tray_item( ?string $voucher_code, array $voucher_row, bool $claimed, array $eval, array $applied_codes ): array {
+		$mode  = (string) ( $voucher_row['distribution_mode'] ?? VoucherService::MODE_SINGLE );
+		$max   = (int) ( $voucher_row['max_uses'] ?? 0 );
+		$used  = (int) ( $voucher_row['uses_count'] ?? 0 );
+		// Unclaimed multi-code rows: customer hasn't been assigned a code yet,
+		// so we leave `code` null. The claim_and_apply call mints one.
+		// Unclaimed single-code rows: master code is the future customer code.
+		$is_multi = $mode === VoucherService::MODE_MULTI_PUBLIC;
+		$code     = $voucher_code;
+		if ( $code === null && ! $is_multi ) {
+			$code = (string) $voucher_row['code'];
+		}
+
+		$already_applied = $code !== null && in_array( strtolower( $code ), $applied_codes, true );
+
+		return [
+			'id'              => (int) $voucher_row['id'],
+			'code'            => $code,
+			'title'           => (string) $voucher_row['title'],
+			'description'     => $voucher_row['description'] ?? null,
+			'discount_type'   => (string) $voucher_row['discount_type'],
+			'discount_value'  => (float) $voucher_row['discount_value'],
+			'min_order_amount'=> (float) ( $voucher_row['min_order_amount'] ?? 0 ),
+			'free_shipping'   => (bool) ( $voucher_row['free_shipping'] ?? false ),
+			'expires_at'      => DateTimeHelper::mysql_to_iso( $voucher_row['expires_at'] ?? null ),
+			'distribution_mode' => $mode,
+			'remaining_uses'  => $is_multi ? null : ( $max > 0 ? max( 0, $max - $used ) : null ),
+			'claimed'         => $claimed,
+			'eligible'        => (bool) $eval['eligible'],
+			'reason'          => $eval['reason'] ?? null,
+			'already_applied' => $already_applied || ( $eval['already_applied'] ?? false ),
+		];
+	}
+
+	/**
+	 * Cart hydrate for REST. WC's session-bound cart doesn't auto-load on
+	 * REST routing (it binds on the `wp` action). Mirrors
+	 * PointsTender::ensure_cart_loaded — used here for the tray's read +
+	 * apply paths so we read/write against the customer's real cart.
+	 */
+	private static function ensure_cart_loaded(): void {
+		if ( ! function_exists( 'WC' ) ) {
+			return;
+		}
+		if ( WC()->cart instanceof \WC_Cart ) {
+			return;
+		}
+		if ( function_exists( 'wc_load_cart' ) ) {
+			wc_load_cart();
+		}
+	}
+
+	/**
+	 * Lowercased applied-coupon codes on the live cart. Used to flag tray
+	 * rows whose coupon is already in the cart (so the widget can render
+	 * "Applied · Remove" instead of "Apply").
+	 *
+	 * Forces `calculate_totals()` first — same trick as PointsController's
+	 * tender_payload. In REST context the cart object exists but its
+	 * applied-coupons list reads from session data that isn't fully
+	 * hydrated until something triggers a recalc. Without this nudge,
+	 * `get_applied_coupons()` came back empty even when the cart visibly
+	 * had a coupon attached, leaving the tray with stale "Apply" buttons.
+	 */
+	private static function current_cart_codes(): array {
+		if ( ! function_exists( 'WC' ) || ! WC()->cart ) {
+			return [];
+		}
+		$cart = WC()->cart;
+		if ( ! empty( $cart->get_cart() ) ) {
+			$cart->calculate_totals();
+		}
+		return array_map( 'strtolower', (array) $cart->get_applied_coupons() );
+	}
+
+	/**
 	 * If the user has an active cart, apply the coupon server-side.
 	 * Returns true on success; false if there's no cart or WC rejects it.
 	 *
@@ -476,6 +771,12 @@ final class VouchersController {
 	 * cart empty) is non-fatal; user just sees the code instead.
 	 */
 	private static function maybe_apply_to_cart( string $code ): bool {
+		// Defensive: an empty code would make WC store a phantom entry that
+		// poisons the cart and bombs on the next page load with "Coupon ''
+		// cannot be applied". Hard-bail rather than letting it through.
+		if ( trim( $code ) === '' ) {
+			return false;
+		}
 		if ( ! function_exists( 'WC' ) ) {
 			return false;
 		}
@@ -484,12 +785,49 @@ final class VouchersController {
 			return false;
 		}
 		if ( $wc->cart->has_discount( $code ) ) {
+			self::flush_cart_session();
 			return true;
 		}
 		try {
-			return (bool) $wc->cart->apply_coupon( $code );
+			$ok = (bool) $wc->cart->apply_coupon( $code );
 		} catch ( \Throwable $e ) {
 			return false;
+		}
+		if ( $ok ) {
+			self::flush_cart_session();
+		}
+		return $ok;
+	}
+
+	/**
+	 * Force the WC session to persist before the REST handler returns.
+	 *
+	 * Why: `apply_coupon` / `remove_coupon` update the cart in-memory and
+	 * rely on WC's `shutdown` hook to write back to the session table.
+	 * Our React widget fires a follow-up `/checkout-tray` read inside the
+	 * same browser tick — that read lands in a separate request that
+	 * hydrates the customer's session fresh from the DB. If the previous
+	 * request hasn't finished writing yet, the read sees the OLD applied
+	 * coupons list and the widget re-renders unchanged. Explicit flush
+	 * here forecloses the race.
+	 *
+	 * `calculate_totals()` is the canonical "I'm done mutating the cart"
+	 * signal; it triggers WC's own session persistence path.
+	 */
+	private static function flush_cart_session(): void {
+		if ( ! function_exists( 'WC' ) || ! WC()->cart ) {
+			return;
+		}
+		WC()->cart->calculate_totals();
+		// WC_Cart::set_session() also pushes cart_contents + applied_coupons
+		// into the session store. calculate_totals alone doesn't always
+		// persist the applied-coupons array after a remove (it does after
+		// apply, via the internal apply_coupon path). Belt to the braces.
+		if ( method_exists( WC()->cart, 'set_session' ) ) {
+			WC()->cart->set_session();
+		}
+		if ( WC()->session && method_exists( WC()->session, 'save_data' ) ) {
+			WC()->session->save_data();
 		}
 	}
 

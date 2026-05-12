@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PointsTenderWidget } from "./PointsTenderWidget.jsx";
+import { VoucherTrayWidget } from "./VoucherTrayWidget.jsx";
 import "../shared/styles.css";
 
 /**
@@ -27,30 +28,46 @@ import "../shared/styles.css";
 const queryClient = new QueryClient();
 const mounted = new WeakSet();
 
-const SELECTOR = "#zippy-crm-checkout-points, .zippy-crm-checkout-points";
+// Mount registry: which selector renders which component. Same lifecycle
+// for both — DOM scan on bundle parse + MutationObserver for late mounts
+// (the ai-zippy theme renders these inside its checkout React tree which
+// hydrates after our bundle runs).
+const MOUNTS = [
+	{
+		selector: "#zippy-crm-checkout-points, .zippy-crm-checkout-points",
+		idMatch:  (node) => node.id === "zippy-crm-checkout-points" || node.classList?.contains("zippy-crm-checkout-points"),
+		render:   () => <PointsTenderWidget />,
+	},
+	{
+		selector: "#zippy-crm-checkout-vouchers, .zippy-crm-checkout-vouchers",
+		idMatch:  (node) => node.id === "zippy-crm-checkout-vouchers" || node.classList?.contains("zippy-crm-checkout-vouchers"),
+		render:   () => <VoucherTrayWidget />,
+	},
+];
 
-function tryMount(el) {
+function tryMount(el, render) {
 	if ( ! el || mounted.has( el ) ) return;
 	mounted.add( el );
 	createRoot( el ).render(
 		<QueryClientProvider client={queryClient}>
-			<PointsTenderWidget />
+			{render()}
 		</QueryClientProvider>,
 	);
 }
 
 // Initial pass for divs already in the DOM.
-document.querySelectorAll(SELECTOR).forEach(tryMount);
+MOUNTS.forEach(({ selector, render }) => {
+	document.querySelectorAll(selector).forEach((el) => tryMount(el, render));
+});
 
-// Watch for late-rendered mounts (theme React checkout hydrates after we run).
 const observer = new MutationObserver((mutations) => {
 	for (const m of mutations) {
 		for (const node of m.addedNodes) {
 			if (node.nodeType !== 1) continue;
-			if (node.id === "zippy-crm-checkout-points" || node.classList?.contains("zippy-crm-checkout-points")) {
-				tryMount(node);
+			for (const mount of MOUNTS) {
+				if (mount.idMatch(node)) tryMount(node, mount.render);
+				node.querySelectorAll?.(mount.selector).forEach((el) => tryMount(el, mount.render));
 			}
-			node.querySelectorAll?.(SELECTOR).forEach(tryMount);
 		}
 	}
 });

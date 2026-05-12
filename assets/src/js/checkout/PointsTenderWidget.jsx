@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/js/
 import { Button } from "@/js/shared/ui/button.jsx";
 import { Skeleton } from "@/js/shared/ui/skeleton.jsx";
 import { money, number } from "@/js/shared/utils/format.js";
+import { triggerCartRefresh } from "./cartRefresh.js";
 
 /**
  * "Use your points" widget. Reads cart context from /points/applicable and
@@ -229,103 +230,3 @@ function ApplyForm({ max, min, rate, onApply, applying, error, cartCapBinding })
 	);
 }
 
-/**
- * Re-renders cart totals after our apply/clear. Different templates need
- * different signals; we try each in order and stop at the first that hits:
- *
- *   0. wp.data Store API — needed by the WC Checkout block (it doesn't
- *      listen to jQuery events at all).
- *   A1. ai-zippy theme — repaints `#az-checkout-totals` via the theme's
- *      `az_get_checkout_totals` admin-ajax. Must short-circuit here: the
- *      widget mount point lives inside `#order_review` on this template,
- *      and the classic strategies below would tear down our React root.
- *   A. Default WC classic — paste the server-rendered fragment we already
- *      received with the apply response, avoiding the `update_checkout`
- *      AJAX race (two responses fighting to replace the same fragment).
- *   1+2. Fallback for unknown templates — fire `update_checkout` and, if
- *      WC's `updated_checkout` doesn't fire back within 700ms, AJAX the
- *      `update_order_review` endpoint directly.
- *
- * The custom `zippy-crm:tender-changed` event is also dispatched for any
- * theme that wants to wire its own listener.
- */
-function triggerCartRefresh(orderReviewHtml) {
-	window.dispatchEvent(new CustomEvent("zippy-crm:tender-changed"));
-
-	const wpData = window.wp?.data;
-	if (wpData?.dispatch) {
-		const cartStore = wpData.dispatch("wc/store/cart");
-		cartStore?.invalidateResolutionForStore?.();
-	}
-
-	const $ = window.jQuery;
-
-	// ai-zippy template: repaint its dedicated totals block. We must NOT also
-	// fall through to the classic strategies — they'd tear down the widget's
-	// React root which lives inside `#order_review` on this template.
-	const ajaxUrl = window.zippyCrm?.ajaxUrl;
-	if (typeof $ === "function" && $("#az-checkout-totals").length && ajaxUrl) {
-		$.post(ajaxUrl, { action: "az_get_checkout_totals" }, (res) => {
-			if (res && res.success && res.data && res.data.html) {
-				$("#az-checkout-totals").html(res.data.html);
-			}
-		});
-		return;
-	}
-
-	// Default classic WC: paste the pre-rendered fragment.
-	if (orderReviewHtml && typeof $ === "function") {
-		const $target = $(".woocommerce-checkout-review-order-table");
-		if ($target.length) {
-			$target.replaceWith(orderReviewHtml);
-			$(document.body).trigger("updated_checkout");
-			return;
-		}
-	}
-
-	if (typeof $ !== "function") return;
-
-	// Fallback: trigger WC's update_checkout flow, then direct-AJAX after
-	// 700ms if WC didn't ack. Covers themes that rebind form.checkout in
-	// ways that swallow the jQuery trigger.
-	const fireTrigger = () => $(document.body).trigger("update_checkout");
-	const fireDirect = () => {
-		const params = window.wc_checkout_params;
-		if (!params || !params.wc_ajax_url) return;
-		const url = params.wc_ajax_url.toString().replace("%%endpoint%%", "update_order_review");
-		const $form = $("form.checkout");
-		const data = {
-			security:        params.update_order_review_nonce,
-			payment_method:  $form.find('input[name="payment_method"]:checked').val() || "",
-			country:         $form.find('#billing_country').val() || "",
-			state:           $form.find('#billing_state').val() || "",
-			postcode:        $form.find(':input[name="billing_postcode"]').val() || "",
-			city:            $form.find(':input[name="billing_city"]').val() || "",
-			address:         $form.find(':input[name="billing_address_1"]').val() || "",
-			address_2:       $form.find(':input[name="billing_address_2"]').val() || "",
-			s_country:       $form.find('#shipping_country').val() || "",
-			s_state:         $form.find('#shipping_state').val() || "",
-			s_postcode:      $form.find(':input[name="shipping_postcode"]').val() || "",
-			s_city:          $form.find(':input[name="shipping_city"]').val() || "",
-			s_address:       $form.find(':input[name="shipping_address_1"]').val() || "",
-			s_address_2:     $form.find(':input[name="shipping_address_2"]').val() || "",
-			has_full_address: $form.find('input#billing_address_1').val() ? "true" : "false",
-			post_data:       $form.serialize(),
-		};
-		$.post(url, data).done((html) => {
-			if (typeof html === "object" && html.fragments) {
-				$.each(html.fragments, (selector, content) => {
-					$(selector).replaceWith(content);
-				});
-				$(document.body).trigger("updated_checkout", [html]);
-			}
-		});
-	};
-
-	// rAF so React commits before WC reads form values; direct AJAX as
-	// fallback if `updated_checkout` doesn't fire back in 700ms.
-	let answered = false;
-	$(document.body).one("updated_checkout", () => { answered = true; });
-	requestAnimationFrame(fireTrigger);
-	setTimeout(() => { if (!answered) fireDirect(); }, 700);
-}

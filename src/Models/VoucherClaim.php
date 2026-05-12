@@ -107,7 +107,7 @@ final class VoucherClaim {
 		global $wpdb;
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				'SELECT id, voucher_id, user_id, status, claimed_at, used_at, order_id
+				'SELECT id, voucher_id, code_id, user_id, status, claimed_at, used_at, order_id
 				 FROM ' . self::table() . '
 				 WHERE voucher_id = %d AND user_id = %d',
 				$voucher_id,
