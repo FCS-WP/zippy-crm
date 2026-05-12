@@ -177,6 +177,25 @@
 - [x] No N+1 on My Claims (single JOIN'd query)
 - [ ] Cache "available" list per-user (deferred — list is small, 1-3 indexed seeks; revisit if it shows up in Query Monitor)
 
+### Checkout voucher tray — one-click apply at checkout (v1.14.0)
+- [x] `Services/VoucherEligibility` — evaluates a voucher against the live cart; maps WC_Discounts validation errors to customer-friendly reason strings ("Add $X to unlock", "Spend at least $Y to unlock", "Not eligible for items in your cart", "Expired", etc.)
+- [x] REST: `GET /vouchers/checkout-tray`, `POST /vouchers/{id}/apply`, `POST /vouchers/{id}/claim-and-apply`, `DELETE /vouchers/{id}/apply`
+- [x] `Controllers/Rest/VouchersController` helpers: `ensure_cart_loaded` (REST cart hydration), `flush_cart_session` (force WC session save after writes), `resolve_claim_code` (single- vs multi-code COALESCE), `current_cart_codes` (lowercased applied list)
+- [x] `Models/VoucherClaim::find_for_user` — added `code_id` to SELECT so multi-code claims resolve correctly
+- [x] `Hooks/WooCommerce` — `woocommerce_review_order_before_payment` priority 5 prints the mount div above the points widget
+- [x] React widget at `assets/src/js/checkout/VoucherTrayWidget.jsx` — collapsible Shopee-style card; eligible bucket (with single-word "Use" CTA) + locked bucket (lock icon + amber reason); first-3 locked + "show N more" expand
+- [x] Shared `cartRefresh.js` extracted from PointsTenderWidget so both checkout widgets use the same template-detection logic (wp.data Store API → ai-zippy theme totals AJAX → classic WC fragment → `update_checkout` fallback). Includes opacity fade on the ai-zippy totals swap
+- [x] `CollapsePanel.jsx` — animated collapse via the CSS `grid-template-rows: 0fr → 1fr` trick; zero JS measurement, graceful degradation
+- [x] Mock layer: 4 new live routes for the tray endpoints
+- [x] Race fixes uncovered: REST `remove_coupon` hydration race (force `calculate_totals` before remove), empty-code guard in `maybe_apply_to_cart` (WC stores phantom entries otherwise), per-row spinner state (clicking Apply on row A no longer disables rows B and C)
+- [x] Coupon × points stacking is symmetric — vouchers are WC_Coupon objects so the v1.13.x auto-clear/clamp logic applies without extra work
+
+### Checkout widget polish — collapsible parity + stable buttons (v1.14.0)
+- [x] Points widget refactored to collapsible card matching the voucher tray's shape (apply state collapsed shows balance summary; applied state collapsed shows Applied · N pts · $X off with Remove inline)
+- [x] Left-side category icons (coin for points, ticket for vouchers, lock for locked rows)
+- [x] Sharper reason copy: action-first wording ("Add $X to unlock" instead of "Spend $X more to use")
+- [x] `shared/ui/button.jsx` — loading state now overlays the spinner on absolutely-positioned-invisible-but-in-flow text, so button width stays constant on click. Global fix across admin/account/checkout.
+
 ---
 
 ## 4. Notifications

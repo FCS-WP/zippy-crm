@@ -37,15 +37,25 @@ export const Button = forwardRef(function Button(
 			type={type}
 			disabled={disabled || loading}
 			className={cn(
-				"zc-inline-flex zc-items-center zc-justify-center zc-gap-2 zc-rounded-md zc-font-medium zc-transition-colors zc-outline-none focus-visible:zc-ring-2 focus-visible:zc-ring-zinc-400 disabled:zc-cursor-not-allowed",
+				"zc-relative zc-inline-flex zc-items-center zc-justify-center zc-gap-2 zc-rounded-md zc-font-medium zc-transition-colors zc-outline-none focus-visible:zc-ring-2 focus-visible:zc-ring-zinc-400 disabled:zc-cursor-not-allowed",
 				variants[variant] ?? variants.primary,
 				sizes[size]    ?? sizes.md,
 				className,
 			)}
 			{...props}
 		>
-			{loading ? <Spinner /> : null}
-			{children}
+			{/*
+			  When loading, keep children in flow but invisible so the
+			  button width doesn't collapse, and overlay the spinner so
+			  it appears alone visually. Without this the button shrank
+			  to spinner-width on click and surrounding layout jumped.
+			*/}
+			<span className={loading ? "zc-invisible" : ""}>{children}</span>
+			{loading ? (
+				<span className="zc-absolute zc-inset-0 zc-flex zc-items-center zc-justify-center">
+					<Spinner />
+				</span>
+			) : null}
 		</button>
 	);
 });
