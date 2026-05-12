@@ -20,6 +20,7 @@ const LIVE_ROUTES = new Set([
 	"GET /vouchers",
 	"GET /vouchers/claims",
 	"GET /vouchers/claims/history",
+	"GET /vouchers/checkout-tray",  // v1.14 voucher tray
 	"GET /notifications/preferences",
 	"PUT /notifications/preferences",
 	// Admin
@@ -50,7 +51,8 @@ const LIVE_ROUTES = new Set([
 
 // Path prefixes that should hit the real backend (for routes with `{id}` etc).
 const LIVE_PREFIXES = [
-	"POST /vouchers/", // /vouchers/{id}/claim
+	"POST /vouchers/",   // /vouchers/{id}/claim, /apply, /claim-and-apply
+	"DELETE /vouchers/", // /vouchers/{id}/apply (remove)
 	// Admin: every per-id voucher route (PUT/DELETE/POST publish/pause/resume/duplicate, GET claims)
 	"PUT /admin/vouchers/",
 	"DELETE /admin/vouchers/",

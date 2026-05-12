@@ -116,6 +116,35 @@ return [
 		'args'    => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
 	],
 
+	// -------- Voucher checkout tray (v1.14.0) --------
+	[
+		'method'  => 'GET',
+		'path'    => '/vouchers/checkout-tray',
+		'handler' => [ VouchersController::class, 'checkout_tray' ],
+		'auth'    => 'user',
+	],
+	[
+		'method'  => 'POST',
+		'path'    => '/vouchers/(?P<id>\d+)/apply',
+		'handler' => [ VouchersController::class, 'apply_to_cart' ],
+		'auth'    => 'user',
+		'args'    => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+	],
+	[
+		'method'  => 'POST',
+		'path'    => '/vouchers/(?P<id>\d+)/claim-and-apply',
+		'handler' => [ VouchersController::class, 'claim_and_apply' ],
+		'auth'    => 'user',
+		'args'    => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+	],
+	[
+		'method'  => 'DELETE',
+		'path'    => '/vouchers/(?P<id>\d+)/apply',
+		'handler' => [ VouchersController::class, 'remove_from_cart' ],
+		'auth'    => 'user',
+		'args'    => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+	],
+
 	// -------- Vouchers (admin) --------
 	[
 		'method'  => 'GET',

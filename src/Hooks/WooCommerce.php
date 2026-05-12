@@ -45,12 +45,13 @@ final class WooCommerce {
 		add_action( 'woocommerce_order_status_cancelled', [ self::class, 'on_order_cancelled' ] );
 		add_action( 'woocommerce_order_status_failed',    [ self::class, 'on_order_cancelled' ] );
 
-		// Checkout page: mount-point for the points-tender widget. Renders
-		// just above the payment methods so the user decides redemption
-		// against the final number (with shipping/tax). The empty <div> is
-		// hydrated by the checkout bundle.
-		// v1.13.0: moved from `woocommerce_before_cart_totals`.
-		add_action( 'woocommerce_review_order_before_payment', [ self::class, 'render_checkout_points_mount' ] );
+		// Checkout page: mount-points for the checkout React widgets.
+		// Both render just above the payment methods (so the customer
+		// decides redemption against the final number with shipping/tax).
+		// Voucher tray fires first (priority 5) so it sits above the
+		// points widget visually.
+		add_action( 'woocommerce_review_order_before_payment', [ self::class, 'render_checkout_vouchers_mount' ], 5 );
+		add_action( 'woocommerce_review_order_before_payment', [ self::class, 'render_checkout_points_mount' ], 10 );
 
 		// Cleanup on user delete
 		add_action( 'delete_user',                        [ self::class, 'on_user_deleted' ] );
@@ -61,6 +62,13 @@ final class WooCommerce {
 			return;
 		}
 		echo '<div id="zippy-crm-checkout-points" class="zippy-crm-mount"></div>';
+	}
+
+	public static function render_checkout_vouchers_mount(): void {
+		if ( ! is_user_logged_in() ) {
+			return;
+		}
+		echo '<div id="zippy-crm-checkout-vouchers" class="zippy-crm-mount"></div>';
 	}
 
 	public static function on_customer_created( int $user_id, array $data = [], bool $password_generated = false ): void {
