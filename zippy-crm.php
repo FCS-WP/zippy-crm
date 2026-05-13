@@ -3,7 +3,7 @@
  * Plugin Name: Zippy CRM
  * Plugin URI:  https://zippy-crm.com
  * Description: Membership, Points and Voucher CRM for WooCommerce.
- * Version:     1.14.0
+ * Version:     1.15.1
  * Author:      Zippy Team
  * Author URI:  https://zippy-crm.com
  * License:     GPL-2.0-or-later
@@ -18,7 +18,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'ZIPPY_CRM_VERSION',  '1.14.0' );
+define( 'ZIPPY_CRM_VERSION',  '1.15.1' );
 define( 'ZIPPY_CRM_FILE',     __FILE__ );
 define( 'ZIPPY_CRM_DIR',      plugin_dir_path( __FILE__ ) );
 define( 'ZIPPY_CRM_URL',      plugin_dir_url( __FILE__ ) );
