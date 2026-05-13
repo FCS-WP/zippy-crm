@@ -106,7 +106,7 @@ jobs:
         env:
           TG_TOKEN:    "6611988217:AAERCNw3lNbdpABmMztQudQXBuPcp1jsKdk"
           TG_CHAT_ID:  "-1002034905977"
-          TG_TOPIC_ID: "7945"
+          TG_TOPIC_ID: "244"
           SLUG:        ${{ github.event.repository.name }}
           VERSION:     ${{ steps.ver.outputs.version }}
           SUMMARY:     ${{ steps.notes.outputs.summary }}
