@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Build a production-ready zip of the Zippy CRM plugin.
+# Build a production-ready zip of a Zippy plugin.
 #
-# Output: dist/zippy-crm-<version>.zip
-#   - Contains a single top-level folder `zippy-crm/` so it unpacks
-#     correctly into wp-content/plugins/zippy-crm/.
+# Output: dist/<slug>-<version>.zip
+#   - Contains a single top-level folder `<slug>/` so it unpacks
+#     correctly into wp-content/plugins/<slug>/.
 #   - Excludes node_modules, source assets, dev tooling, tests, docs,
 #     git metadata, and the dist folder itself.
 #
 # Usage:
-#   ./scripts/build-release.sh           # version read from zippy-crm.php
-#   ./scripts/build-release.sh 1.2.3     # override version
+#   ./scripts/build-release.sh                       # version from <slug>.php; slug = parent dir name
+#   ./scripts/build-release.sh 1.2.3                 # explicit version
+#   ./scripts/build-release.sh 1.2.3 --slug other    # explicit slug (when not running from the plugin dir name)
 #
 # Requires: node, npm, zip, rsync.
 
@@ -17,15 +18,46 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PLUGIN_SLUG="zippy-crm"
+
+# --- Parse args -------------------------------------------------------------
+# Positional: first non-flag arg is VERSION.
+# Flag:       --slug <name>  override the plugin slug (otherwise derived
+#                            from the plugin directory name, which matches
+#                            the WP convention <slug>/<slug>.php).
+VERSION=""
+PLUGIN_SLUG=""
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--slug)
+			PLUGIN_SLUG="${2:-}"
+			shift 2
+			;;
+		--slug=*)
+			PLUGIN_SLUG="${1#--slug=}"
+			shift
+			;;
+		*)
+			if [[ -z "$VERSION" ]]; then
+				VERSION="$1"
+			else
+				echo "ERROR: unexpected argument: $1" >&2
+				exit 1
+			fi
+			shift
+			;;
+	esac
+done
+
+if [[ -z "$PLUGIN_SLUG" ]]; then
+	PLUGIN_SLUG="$(basename "$PLUGIN_DIR")"
+fi
 
 cd "$PLUGIN_DIR"
 
 # --- Resolve version --------------------------------------------------------
-if [[ "${1:-}" != "" ]]; then
-	VERSION="$1"
-else
-	VERSION="$(grep -E '^[[:space:]]*\*[[:space:]]*Version:' zippy-crm.php \
+if [[ -z "$VERSION" ]]; then
+	# Plugin header lives in <slug>.php (WordPress convention).
+	VERSION="$(grep -E '^[[:space:]]*\*[[:space:]]*Version:' "${PLUGIN_SLUG}.php" \
 		| head -1 | sed -E 's/.*Version:[[:space:]]*([0-9A-Za-z._-]+).*/\1/')"
 fi
 
@@ -98,8 +130,8 @@ rsync -a \
 	./ "$STAGE_DIR/"
 
 # --- Sanity-check the staged tree -------------------------------------------
-if [[ ! -f "$STAGE_DIR/zippy-crm.php" ]]; then
-	echo "ERROR: zippy-crm.php missing from stage." >&2
+if [[ ! -f "$STAGE_DIR/${PLUGIN_SLUG}.php" ]]; then
+	echo "ERROR: ${PLUGIN_SLUG}.php missing from stage." >&2
 	exit 1
 fi
 if [[ ! -d "$STAGE_DIR/assets/dist" ]]; then

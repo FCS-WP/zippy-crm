@@ -16,6 +16,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Need full history so the commit-summary step (later) can
+          # diff from the previous tag. Default fetch-depth: 1 only
+          # pulls HEAD, which breaks `git describe --tags`.
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -25,11 +30,15 @@ jobs:
 
       - name: Resolve version
         id: ver
+        env:
+          SLUG: ${{ github.event.repository.name }}
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION=$(grep -E '^[[:space:]]*\*[[:space:]]*Version:' zippy-crm.php \
+            # Plugin header lives in <repo-slug>.php (WordPress convention:
+            # main plugin file matches the directory name).
+            VERSION=$(grep -E '^[[:space:]]*\*[[:space:]]*Version:' "${SLUG}.php" \
               | head -1 | sed -E 's/.*Version:[[:space:]]*([0-9A-Za-z._-]+).*/\1/')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -38,19 +47,77 @@ jobs:
       - name: Build release zip
         run: |
           chmod +x scripts/build-release.sh
-          ./scripts/build-release.sh "${{ steps.ver.outputs.version }}"
+          ./scripts/build-release.sh "${{ steps.ver.outputs.version }}" --slug "${{ github.event.repository.name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zippy-crm-${{ steps.ver.outputs.version }}
-          path: dist/zippy-crm-${{ steps.ver.outputs.version }}.zip
+          name: ${{ github.event.repository.name }}-${{ steps.ver.outputs.version }}
+          path: dist/${{ github.event.repository.name }}-${{ steps.ver.outputs.version }}.zip
           if-no-files-found: error
 
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/zippy-crm-${{ steps.ver.outputs.version }}.zip
+          files: dist/${{ github.event.repository.name }}-${{ steps.ver.outputs.version }}.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+      # ---------------- Telegram delivery ----------------
+      # On tagged releases, push the installable zip to the team's
+      # Telegram topic so they can grab it without logging into
+      # GitHub. Caption: version + one-line-per-commit summary since
+      # the previous tag.
+      #
+      # Bot config is hardcoded below. This file is meant to be reused
+      # across the team's plugin repos; the bot points at a shared
+      # delivery topic so any project tagged with `v*` lands there.
+      # If we ever need per-project topics, swap TG_TOPIC_ID for a
+      # lookup keyed by ${{ github.event.repository.name }}.
+      - name: Build commit summary
+        id: notes
+        if: github.ref_type == 'tag'
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [[ -n "$PREV_TAG" ]]; then
+            RANGE="$PREV_TAG..${GITHUB_REF_NAME}"
+          else
+            RANGE="${GITHUB_REF_NAME}"
+          fi
+          echo "Building summary for range: $RANGE"
+          # Limit to 15 commits so the caption stays readable.
+          # `--no-merges` because merge commits are noise next to the
+          # squash/conventional commits that actually describe changes.
+          SUMMARY=$(git log "$RANGE" --no-merges --pretty=format:"• %s" | head -n 15)
+          # Telegram captions cap at 1024 chars; truncate defensively.
+          if [[ ${#SUMMARY} -gt 900 ]]; then
+            SUMMARY="${SUMMARY:0:900}…"
+          fi
+          {
+            echo "summary<<SUMMARY_EOF"
+            echo "$SUMMARY"
+            echo "SUMMARY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send zip to Telegram
+        if: github.ref_type == 'tag'
+        continue-on-error: true
+        env:
+          TG_TOKEN:    "6611988217:AAERCNw3lNbdpABmMztQudQXBuPcp1jsKdk"
+          TG_CHAT_ID:  "-1002034905977"
+          TG_TOPIC_ID: "7945"
+          SLUG:        ${{ github.event.repository.name }}
+          VERSION:     ${{ steps.ver.outputs.version }}
+          SUMMARY:     ${{ steps.notes.outputs.summary }}
+        run: |
+          ZIP="dist/${SLUG}-${VERSION}.zip"
+          CAPTION="🚀 ${SLUG} v${VERSION} ready to install"$'\n\n'"${SUMMARY}"$'\n\n'"Upload via WP Admin → Plugins → Add New → Upload Plugin."
+          curl --fail --silent --show-error \
+            -F "chat_id=${TG_CHAT_ID}" \
+            -F "message_thread_id=${TG_TOPIC_ID}" \
+            -F "document=@${ZIP}" \
+            -F "caption=${CAPTION}" \
+            "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
+            > /dev/null
+          echo "Sent ${ZIP} to Telegram chat ${TG_CHAT_ID} topic ${TG_TOPIC_ID}."
