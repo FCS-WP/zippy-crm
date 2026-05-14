@@ -312,6 +312,13 @@ return [
 		],
 	],
 	[
+		'method'  => 'POST',
+		'path'    => '/admin/members/enroll',
+		'handler' => [ MembershipController::class, 'admin_enroll' ],
+		'auth'    => 'manage_woocommerce',
+		'args'    => [ 'user_id' => [ 'type' => 'integer', 'required' => true ] ],
+	],
+	[
 		'method'  => 'GET',
 		'path'    => '/admin/members/(?P<user_id>\d+)',
 		'handler' => [ MembershipController::class, 'admin_get' ],

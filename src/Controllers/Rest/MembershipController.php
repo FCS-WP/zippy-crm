@@ -148,6 +148,39 @@ final class MembershipController {
 		] );
 	}
 
+	/**
+	 * Admin: enroll an existing WP user as a member.
+	 *
+	 * Mirrors the auto-flow that fires on woocommerce_created_customer for
+	 * brand-new customers — same three side effects (membership row, points
+	 * summary, notification opt-in). Lets admins onboard users who pre-date
+	 * the plugin or who are non-customers (subscribers etc.) without going
+	 * through WP's user-creation surface.
+	 *
+	 * 409 if the user already has a membership row — we never silently
+	 * re-seed because that would reset their tier/points to defaults.
+	 */
+	public static function admin_enroll( \WP_REST_Request $request ) {
+		$user_id = (int) $request->get_param( 'user_id' );
+		if ( $user_id <= 0 ) {
+			return RestResponse::error( 'bad_user_id', __( 'user_id is required.', 'zippy-crm' ), 400 );
+		}
+		if ( ! get_userdata( $user_id ) ) {
+			return RestResponse::error( 'user_not_found', __( 'User not found.', 'zippy-crm' ), 404 );
+		}
+		if ( Membership::find_by_user( $user_id ) !== null ) {
+			return RestResponse::error( 'already_member', __( 'This user is already a member.', 'zippy-crm' ), 409 );
+		}
+
+		// Reuse the exact code path that runs on WC customer creation, so
+		// future seeding logic only lives in one place.
+		\ZippyCrm\Hooks\WooCommerce::on_customer_created( $user_id );
+
+		// Return the same shape as admin_get so the React side can drop the
+		// response into its detail-drawer cache without an extra fetch.
+		return self::admin_get( $request );
+	}
+
 	public static function admin_set_level( \WP_REST_Request $request ) {
 		$user_id = (int) $request['user_id'];
 		if ( ! get_userdata( $user_id ) ) {
