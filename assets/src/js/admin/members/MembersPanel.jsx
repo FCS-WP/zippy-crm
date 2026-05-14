@@ -4,6 +4,8 @@ import { useTiers } from "@/js/shared/hooks/useTiers.js";
 import { FilterChips } from "@/js/shared/components/FilterChips.jsx";
 import { Pagination } from "@/js/shared/components/Pagination.jsx";
 import { Drawer } from "../vouchers/Drawer.jsx";
+import { Button } from "@/js/shared/ui/button.jsx";
+import { AddMemberDialog } from "./AddMemberDialog.jsx";
 import { FilterBar } from "./FilterBar.jsx";
 import { LevelChangeForm } from "./LevelChangeForm.jsx";
 import { MemberDetailDrawerBody } from "./MemberDetailDrawer.jsx";
@@ -28,6 +30,7 @@ export default function MembersPanel() {
 	const [detailUser, setDetailUser] = useState(null);
 	const [levelRow, setLevelRow]     = useState(null);
 	const [pointsRow, setPointsRow]   = useState(null);
+	const [addOpen, setAddOpen]       = useState(false);
 
 	const { labelFor } = useTiers();
 
@@ -60,11 +63,14 @@ export default function MembersPanel() {
 
 	return (
 		<div className="zc-space-y-4 zc-p-6">
-			<header>
-				<h1 className="zc-text-2xl zc-font-semibold zc-text-zinc-900">Members</h1>
-				<p className="zc-text-sm zc-text-zinc-500">
-					Filter by level or status, search by login/email, and adjust points or level per row.
-				</p>
+			<header className="zc-flex zc-items-start zc-justify-between zc-gap-4">
+				<div>
+					<h1 className="zc-text-2xl zc-font-semibold zc-text-zinc-900">Members</h1>
+					<p className="zc-text-sm zc-text-zinc-500">
+						Filter by level or status, search by login/email, and adjust points or level per row.
+					</p>
+				</div>
+				<Button onClick={() => setAddOpen(true)}>Add member</Button>
 			</header>
 
 			<StatsBar counts={counts} />
@@ -138,6 +144,18 @@ export default function MembersPanel() {
 			>
 				{pointsRow ? <PointsAdjustForm row={pointsRow} onClose={() => setPointsRow(null)} /> : null}
 			</Drawer>
+
+			<AddMemberDialog
+				open={addOpen}
+				onClose={() => setAddOpen(false)}
+				onEnrolled={(userId) => {
+					// Close the add dialog and immediately open the new member's
+					// detail drawer so the admin can set tier / adjust points
+					// without an extra navigation.
+					setAddOpen(false);
+					setDetailUser(userId);
+				}}
+			/>
 		</div>
 	);
 }
