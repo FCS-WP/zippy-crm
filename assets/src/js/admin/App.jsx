@@ -3,6 +3,13 @@ import MembersPanel  from "./members/MembersPanel.jsx";
 import PointsPanel   from "./points/PointsPanel.jsx";
 import TiersPanel    from "./tiers/TiersPanel.jsx";
 import VouchersPanel from "./vouchers/VouchersPanel.jsx";
+// Users panel — eager. We tried lazy + Suspense; React 18 raced the
+// fallback-to-content commit against the panel's first /admin/users
+// useApiQuery render, leaving the fallback div detached when React's
+// commit phase tried to remove it (DOMException: removeChild — "node
+// is not a child of this node"). Users has no heavy deps so eager
+// imports cost ~nothing in admin.js size.
+import UsersPanel from "./users/UsersPanel.jsx";
 
 // Reports lazy-loads Recharts (~95KB gzipped) — keep it out of the base
 // admin bundle. Per perf rule: chart lib only loads when this panel mounts.
@@ -12,10 +19,6 @@ const ReportsPanel = lazy(() => import("./reports/ReportsPanel.jsx"));
 // Lazy-load so a tab the admin rarely opens doesn't cost everyone the
 // calendar bundle.
 const AuditPanel = lazy(() => import("./audit/AuditPanel.jsx"));
-
-// Users panel — kept eager would be fine (no heavy deps), but we
-// lazy-load anyway to keep admin.js bounded as more panels land.
-const UsersPanel = lazy(() => import("./users/UsersPanel.jsx"));
 
 // Settings panel — small, infrequent visits; lazy-load consistent with the others.
 const SettingsPanel = lazy(() => import("./settings/SettingsPanel.jsx"));
@@ -29,11 +32,7 @@ export default function App({ panel }) {
 	if (panel === "tiers")    return <TiersPanel />;
 	if (panel === "points")   return <PointsPanel />;
 	if (panel === "vouchers") return <VouchersPanel />;
-	if (panel === "users")    return (
-		<Suspense fallback={<div className="zc-p-6 zc-text-sm zc-text-zinc-500">Loading users…</div>}>
-			<UsersPanel />
-		</Suspense>
-	);
+	if (panel === "users")    return <UsersPanel />;
 	if (panel === "reports")  return (
 		<Suspense fallback={<div className="zc-p-6 zc-text-sm zc-text-zinc-500">Loading reports…</div>}>
 			<ReportsPanel />

@@ -5,6 +5,7 @@ defined( 'ABSPATH' ) || exit;
 
 final class MembersController {
 	public static function render(): void {
-		echo '<div id="zippy-crm-admin-members" class="wrap"></div>';
+		// See UsersController for why .wrap goes on the outer div, not the mount.
+		echo '<div class="wrap"><div id="zippy-crm-admin-members"></div></div>';
 	}
 }
