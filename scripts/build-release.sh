@@ -112,7 +112,13 @@ rsync -a \
 	--exclude '/vendor/' \
 	--exclude '/dist/' \
 	--exclude '/tests/' \
-	--exclude '/docs/' \
+	`# Keep docs/guide/** (the in-product Documentation page reads from it)` \
+	`# but strip the dev-facing top-level markdown + api/ + charts/ + database/.` \
+	`# rsync rule: include parents BEFORE excluding siblings.` \
+	--include '/docs/' \
+	--include '/docs/guide/' \
+	--include '/docs/guide/**' \
+	--exclude '/docs/*' \
 	--exclude '/scripts/' \
 	--exclude '/assets/src/' \
 	--exclude 'CLAUDE.md' \
@@ -140,6 +146,17 @@ if [[ ! -d "$STAGE_DIR/assets/dist" ]]; then
 fi
 if [[ ! -d "$STAGE_DIR/src" ]]; then
 	echo "ERROR: src/ missing from stage." >&2
+	exit 1
+fi
+# DocsController renders docs/guide/*.md inside wp-admin. Without these
+# files the in-product Documentation page is empty. v1.15.3 shipped
+# broken because /docs/ was excluded wholesale.
+if [[ ! -d "$STAGE_DIR/docs/guide" ]]; then
+	echo "ERROR: docs/guide/ missing from stage." >&2
+	exit 1
+fi
+if [[ -z "$(ls "$STAGE_DIR/docs/guide/"*.md 2>/dev/null)" ]]; then
+	echo "ERROR: docs/guide/ has no .md files in stage." >&2
 	exit 1
 fi
 
